@@ -410,6 +410,14 @@
       throw taggedError(err, msg);
     });
   }
+  /** النطاق الحالي كما يجب إضافته في Firebase (بلا مسار) */
+  function currentDomain() {
+    try {
+      if (typeof location !== 'undefined' && location.hostname) return location.hostname;
+    } catch (e) {}
+    return '';
+  }
+
   /** خطأ برسالة عربية واضحة، مع الحفاظ على رمز الخطأ الأصلي للتشخيص */
   function taggedError(orig, friendly) {
     const e = new Error(friendly);
@@ -425,7 +433,12 @@
     const msg = String((err && err.message) || '');
 
     if (code === 'auth/unauthorized-domain' || /unauthorized domain/i.test(msg)) {
-      return 'هذا النطاق غير مصرّح به في Firebase. افتح: Authentication ← Settings ← Authorized domains ← Add domain، وأضف نطاق موقعك (مثال: your-project.pages.dev).';
+      const d = currentDomain();
+      const list = d ? `«${d}»` : 'نطاق موقعك';
+      return `هذا النطاق غير مصرّح به في Firebase.\n\nافتح: Firebase ← Authentication ← Settings ← Authorized domains ← Add domain\nوأضف هذا النطاق بالحرف:\n${d || '(انسخ اسم النطاق من شريط العنوان)'}\n\nملاحظة: أضف النطاق وحده بلا https:// ولا مسار.`;
+    }
+    if (code === 'auth/admin-restricted-operation' || /admin-restricted-operation/i.test(msg)) {
+      return 'العملية مطلوبة غير مُفعَّلة في Firebase. افتح: Authentication ← Sign-in method، وفعّل الطريقة التي تستخدمها (Email/Password أو Google).';
     }
     if (code === 'auth/operation-not-allowed' || /operation-not-allowed/i.test(msg)) {
       return 'تسجيل الدخول بالبريد وكلمة المرور غير مُفعَّل. افتح: Authentication ← Sign-in method ← فعّل Email/Password.';

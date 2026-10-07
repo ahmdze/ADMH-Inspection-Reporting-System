@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '4.1.0';
+const APP_VERSION = '4.2.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1353,6 +1353,10 @@ function bindButtons() {
     const e = $(s);
     if (e) { e.addEventListener('input', renderArchive); e.addEventListener('change', renderArchive); }
   });
+
+  /* نطاق الموقع — يظهر في دليل الإعداد لنسخه إلى Firebase */
+  const hd = $('#helpDomain');
+  if (hd && typeof location !== 'undefined' && location.hostname) hd.textContent = location.hostname;
 
   /* لوحة المفاتيح */
   document.addEventListener('keydown', e => {

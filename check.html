@@ -66,6 +66,11 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
       <b>مهم:</b> Firebase لا يسمح ببريد واحد على مزوّدين مختلفين. إن أنشأت الحساب بحساب
       Google فلا تستخدم كلمة المرور، والعكس.
     </p>
+    <div class="warnbox" style="margin-top:12px">
+      <b>قبل أول محاولة:</b> أضف نطاقك في Firebase ← <b>Authentication</b> ← <b>Settings</b> ←
+      <b>Authorized domains</b> ← <b>Add domain</b>. النطاق مكتوب في «النطاق الحالي» أعلاه —
+      انسخه كما هو بلا <code>https://</code> وبلا أي مسار بعده.
+    </div>
   </div>
 
   <div class="card" id="logCard" style="display:none">
@@ -142,6 +147,16 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
   }
 
   line('#envChecks', 'ok', 'مولّد ملفات Word', window.docx ? 'مكتبة docx محمّلة' : 'لم تُحمَّل في هذه الصفحة (طبيعي)');
+
+  /* النطاق — أهم معلومة لإعداد Firebase */
+  if (location.hostname) {
+    line('#envChecks', 'ok', 'النطاق الحالي' +
+      (location.hostname.endsWith('.workers.dev') || location.hostname.endsWith('.pages.dev')
+        ? ' — يجب إضافته في Firebase' : ''),
+      location.hostname);
+  } else {
+    line('#envChecks', 'warn', 'النطاق الحالي', 'لا نطاق (فتحتَ الملف محلياً عبر file://) — الدخول لن يعمل بلا نطاق');
+  }
 
   if (failures) setSummary('bad', 'هناك ' + failures + ' مشكلة تمنع التشغيل');
   else if (warnings) setSummary('warn', 'النظام يعمل مع ' + warnings + ' تنبيه');

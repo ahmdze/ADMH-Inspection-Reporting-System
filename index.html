@@ -678,12 +678,17 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             <summary style="cursor:pointer;font-weight:600;color:var(--primary-2)">مطلوب مرة واحدة في لوحة Firebase</summary>
             <ol style="padding-inline-start:20px;line-height:1.95;margin-top:10px">
               <li>افتح <b>console.firebase.google.com</b> ← مشروع <code>admh-inspection-reporting-sys</code>.</li>
-              <li><b>Build</b> ← <b>Authentication</b> ← <b>Get started</b>، وفعّل <b>Email/Password</b>.</li>
-              <li><b>Build</b> ← <b>Firestore Database</b> ← <b>Create database</b> (Production mode، وأقرب موقع: me-west1).</li>
-              <li>من تبويب <b>Rules</b> الصق القواعد الموجودة في <code>README.md</code> ثم <b>Publish</b>. <b>هذه الخطوة إلزامية.</b></li>
-              <li>عادياً تُضاف نطاقات النشر تلقائياً؛ إن ظهر خطأ «نطاق غير مصرّح» فأضف نطاق موقعك في
-                  <b>Authentication</b> ← <b>Settings</b> ← <b>Authorized domains</b>.</li>
+              <li><b>Authentication</b> ← <b>Get started</b>، ثم <b>Sign-in method</b> ← فعّل
+                  <b>Email/Password</b> (و<b>Google</b> إن أردت الدخول بحساب Google).</li>
+              <li><b>Firestore Database</b> ← <b>Create database</b> (Production mode، وأقرب موقع: me-west1).</li>
+              <li>من تبويب <b>Rules</b> الصق القواعد الموجودة في <code>README.md</code> ثم <b>Publish</b>. <b>إلزامية.</b></li>
+              <li><b>Authentication</b> ← <b>Settings</b> ← <b>Authorized domains</b> ← <b>Add domain</b>،
+                  وأضف نطاق موقعك بالحرف كما يظهر في شريط العنوان (مثال:
+                  <code id="helpDomain">اسم-الموقع.workers.dev</code>) — بلا <code>https://</code> وبلا مسار.</li>
             </ol>
+            <p class="hint">
+              إن ظهر خطأ «نطاق غير مصرّح» فانسخ النطاق من صفحة <a href="check.html">الفحص</a> وأضفه كما هو.
+            </p>
           </details>
         </div>
 
