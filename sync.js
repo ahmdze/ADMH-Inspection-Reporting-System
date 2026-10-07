@@ -230,45 +230,58 @@
     return provider;
   }
 
-  /** هل الجهاز محمول؟ نوافذ Google المنبثقة غير موثوقة على الهواتف. */
-  function isMobile() {
+  /** هل نستخدم إعادة التوجيه بدل النافذة المنبثقة؟
+   *  نعم على أجهزة اللمس كلها، لأن Safari على iOS يحجب نتيجة إعادة التوجيه
+   *  إذا بدأت العملية من نافذة منبثقة. وحتى iPad يظهر كسطح مكتب في بعض
+   *  الإصدارات، لذا نكشف اللمس أيضاً. */
+  function preferRedirect() {
     try {
       const ua = (global.navigator && global.navigator.userAgent) || '';
       if (/Android|iPhone|iPad|iPod|Mobile|Opera Mini|IEMobile/i.test(ua)) return true;
-      /* شاشة صغيرة = غالباً هاتف */
-      if (global.innerWidth && global.innerWidth < 640) return true;
+      if (global.navigator && global.navigator.maxTouchPoints > 1) return true;
+      if (global.innerWidth && global.innerWidth < 768) return true;
+      /* تذكّر أن النافذة المنبثقة فشلت سابقاً على هذا الجهاز */
+      if (redirectPreferred) return true;
     } catch (e) {}
     return false;
   }
 
-  /** الدخول بحساب Google.
-   *  على الهاتف نستخدم إعادة التوجيه (redirect) لأن النوافذ المنبثقة
-   *  تُحجب أو تفشل بـ auth/internal-error على كثير من المتصفحات المحمولة. */
+  let redirectPreferred = false;
+  try { redirectPreferred = localStorage.getItem('admh.sync.redirect') === '1'; } catch (e) {}
+  function rememberRedirect() {
+    redirectPreferred = true;
+    try { localStorage.setItem('admh.sync.redirect', '1'); } catch (e) {}
+  }
+
+  /** الدخول بحساب Google. */
   function signInGoogle() {
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
     return initFirebase().then(() => {
       const provider = googleProvider();
 
-      /* ينفّذ إعادة التوجيه. في المتصفح تُغادر الصفحة فلا يعود الوعد أبداً،
-         لكن نُبقي مساراً آمناً: إن عاد الوعد (بيئة لا تُوجّه فعلاً) نرمي
-         خطأً واضحاً بدل التعليق الصامت. */
-      const goRedirect = () => fb.auth.signInWithRedirect(provider).then(() => {
-        const e = new Error('لم تكتمل إعادة التوجيه إلى Google. افتح الموقع في Chrome أو Safari مباشرةً.');
-        e.code = 'auth/redirect-did-not-navigate';
-        throw e;
-      });
-
-      if (isMobile() && fb.auth.signInWithRedirect) {
+      /* في المتصفح تُغادر الصفحة فلا يعود الوعد أبداً، لكن نُبقي مساراً
+         آمناً: إن عاد الوعد (بيئة لا تُوجّه فعلاً) نرمي خطأً واضحاً
+         بدل التعليق الصامت. */
+      const goRedirect = () => {
         setState({ busy: true, error: '' });
-        return goRedirect();
-      }
+        return fb.auth.signInWithRedirect(provider).then(() => {
+          const e = new Error('لم تكتمل إعادة التوجيه إلى Google. افتح الموقع في Chrome أو Safari مباشرةً وتأكد أن الكوكيز مسموحة.');
+          e.code = 'auth/redirect-did-not-navigate';
+          throw e;
+        });
+      };
+
+      if (preferRedirect() && fb.auth.signInWithRedirect) return goRedirect();
 
       return fb.auth.signInWithPopup(provider).catch(err => {
         const code = (err && err.code) || '';
-        /* بعض المتصفحات تفشل في النافذة المنبثقة: انتقل إلى إعادة التوجيه */
+        /* النافذة المنبثقة تفشل على كثير من الأجهزة: انتقل إلى إعادة
+           التوجيه واذكر ذلك للاستخدامات القادمة. */
         if ((code === 'auth/popup-blocked' || code === 'auth/internal-error'
              || code === 'auth/operation-not-supported-in-this-environment'
-             || code === 'auth/cancelled-popup-request') && fb.auth.signInWithRedirect) {
+             || code === 'auth/cancelled-popup-request'
+             || code === 'auth/web-storage-unsupported') && fb.auth.signInWithRedirect) {
+          rememberRedirect();
           return goRedirect();
         }
         throw err;
@@ -278,14 +291,19 @@
 
   /** يعالج نتيجة إعادة التوجيه إن كنا عائدين من Google */
   function consumeRedirect() {
-    if (!fb.auth || !fb.auth.getRedirectResult) return Promise.resolve(null);
-    return fb.auth.getRedirectResult().then(res => {
-      if (res && res.user) {
-        state.user = res.user;
-        setState({ connected: true, busy: false, user: res.user, error: '' });
-        return res.user;
-      }
-      return null;
+    if (!cfg) cfg = resolveConfig();
+    if (!cfg) return Promise.resolve(null);
+    /* نهيّئ Firebase إن لم يكن مهيّأً بعد (صفحة الفحص تستدعي هذا مباشرة) */
+    return initFirebase().then(() => {
+      if (!fb.auth || !fb.auth.getRedirectResult) return null;
+      return fb.auth.getRedirectResult().then(res => {
+        if (res && res.user) {
+          state.user = res.user;
+          setState({ connected: true, busy: false, user: res.user, error: '' });
+          return res.user;
+        }
+        return null;
+      });
     }).catch(err => {
       /* لا نُفشل الإقلاع إن لم تكن هناك إعادة توجيه أصلاً */
       const code = (err && err.code) || '';
@@ -309,6 +327,27 @@
   function reportsCol() { return fb.db.collection('users').doc(state.user.uid).collection('reports'); }
   function settingsDoc() { return fb.db.collection('users').doc(state.user.uid).collection('meta').doc('settings'); }
   function pullsCol() { return fb.db.collection('users').doc(state.user.uid).collection('meta'); }
+
+  /* ---------------------------------------------------------------------------
+     الخطّافات الافتراضية.
+     وجودها يسمح باستخدام وحدة المزامنة وحدها (مثل صفحة الفحص) بلا الحاجة
+     إلى تهيئة من التطبيق. كان غيابها يمنع المزامنة في صفحة الفحص.
+     --------------------------------------------------------------------------- */
+  function defaultHooks() {
+    return {
+      load: () => ({ reports: [], settings: null, library: null, lists: null }),
+      save: () => {},
+    };
+  }
+
+  /** يضمن تثبيت الخطّافات قبل أي عملية (يُستدعى من connect/syncNow).
+   *  يقبل خطّافات صريحة، وإلا استخدم الافتراضية. */
+  function ensureInit(h) {
+    if (h) hooks = h;
+    if (!hooks) hooks = defaultHooks();
+    if (readyResolve) { readyResolve(true); readyResolve = null; }
+    return hooks;
+  }
 
   /* --------------------------------------------------------- الدفع */
   function pushReports(reports) {
@@ -386,7 +425,7 @@
    */
   function syncNow(opts) {
     opts = opts || {};
-    if (!hooks) return Promise.reject(new Error('وحدة المزامنة لم تكتمل تهيئتها بعد — أعد المحاولة'));
+    ensureInit();
     if (!state.connected || !state.user) return Promise.reject(new Error('غير متصل بالمزامنة'));
     if (state.busy) return Promise.resolve({ skipped: true });
     setState({ busy: true, error: '' });
@@ -558,9 +597,10 @@
    */
   function connect(email, password, mode) {
     /* الإعدادات مضمّنة، لذا نضمن وجودها حتى لو لم تُستدعَ init بعد
-       (مثل صفحة الفحص المستقلة). */
+       (مثل صفحة الفحص المستقلة). ونضمن كذلك وجود الخطّافات. */
     if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
+    ensureInit();
     setState({ busy: true, error: '' });
 
     const attempt = mode === 'google' ? signInGoogle() : signInEmail(email, password);
@@ -604,6 +644,10 @@
     reset() { clearConfig(); },
     connect,
     requestReset,
+    /** يُعالج نتيجة إعادة التوجيه عند العودة من Google */
+    consumeRedirect,
+    /** يضمن تثبيت الخطّافات (للصفحات المستقلة) */
+    ensureInit,
     signOut,
     syncNow,
     pushPullRequest,

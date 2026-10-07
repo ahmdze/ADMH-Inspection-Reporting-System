@@ -162,6 +162,33 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
   else if (warnings) setSummary('warn', 'النظام يعمل مع ' + warnings + ' تنبيه');
   else setSummary('ok', 'النظام يعمل بشكل سليم — افحص المزامنة أدناه');
 
+  /* ---------------------------------------------------------------------
+     عالج نتيجة إعادة توجيه Google فوراً.
+     بدون هذا: العودة من Google لا تُكمل الدخول، ولا تظهر أي رسالة.
+     --------------------------------------------------------------------- */
+  if (sync) {
+    sync.ensureInit({ load: () => ({ reports: [], settings: null, library: null, lists: null }), save: () => {} });
+    line('#syncChecks', 'wait', 'جارٍ التحقق من نتيجة الدخول بحساب Google…', '');
+    sync.consumeRedirect().then(user => {
+      const waits = $('#syncChecks').querySelectorAll('.wait');
+      waits.forEach(e => e.remove());
+      if (user) {
+        line('#syncChecks', 'ok', 'تم الدخول بحساب Google', user.email || user.uid);
+        setSummary('ok', 'تم الدخول بنجاح — اضغط «فحص بالبريد» أو جرّب المزامنة من النظام');
+      } else {
+        const st = sync.status();
+        if (st && st.error) {
+          line('#syncChecks', 'bad', 'تعذّر إكمال الدخول', st.error);
+          setSummary('bad', 'تعذّر الدخول — اقرأ السبب أدناه');
+        } else {
+          line('#syncChecks', 'ok', 'لا توجد إعادة توجيه معلّقة', 'اختر طريقة الدخول أعلاه');
+        }
+      }
+    }).catch(() => {
+      $('#syncChecks').querySelectorAll('.wait').forEach(e => e.remove());
+    });
+  }
+
   function setSummary(cls, text) {
     const el = $('#summary');
     el.className = 'sum ' + cls;
