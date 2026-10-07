@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>فحص النظام</title>
+<style>
+:root{--ok:#2e7d32;--err:#c62828;--warn:#ef6c00;--pri:#004d40;--bg:#eef2f5;--card:#fff;--bd:#d3dae0;--tx:#1b2429;--mut:#65727c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.7 'Segoe UI',Tahoma,sans-serif;padding:16px}
+.wrap{max-width:760px;margin:0 auto}
+h1{color:var(--pri);font-size:1.25em;margin:0 0 4px}
+p.sub{color:var(--mut);margin:0 0 16px;font-size:.9em}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px;margin-bottom:14px}
+h2{font-size:1em;color:var(--pri);margin:0 0 10px}
+.row{display:flex;gap:9px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--bd)}
+.row:last-child{border-bottom:0}
+.ic{flex:none;width:22px;text-align:center;font-weight:700}
+.ok .ic{color:var(--ok)}.bad .ic{color:var(--err)}.warn .ic{color:var(--warn)}.wait .ic{color:var(--mut)}
+.txt{flex:1;min-width:0}
+.txt b{display:block}
+.txt small{color:var(--mut);font-size:.85em;word-break:break-word}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:560px){.grid{grid-template-columns:1fr}}
+label{font-size:.82em;font-weight:600;color:var(--mut);display:block;margin-bottom:3px}
+input{width:100%;padding:10px;border:1px solid var(--bd);border-radius:8px;font:inherit}
+button{background:var(--pri);color:#fff;border:0;border-radius:8px;padding:11px 16px;font:inherit;font-weight:600;cursor:pointer;width:100%}
+button:disabled{opacity:.5;cursor:not-allowed}
+pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:auto;font-size:.8em;direction:ltr;text-align:left}
+.sum{font-weight:700;padding:11px;border-radius:8px;text-align:center;margin-bottom:14px}
+.sum.ok{background:rgba(46,125,50,.14);color:var(--ok)}
+.sum.bad{background:rgba(198,40,40,.13);color:var(--err)}
+.sum.warn{background:rgba(239,108,0,.13);color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>فحص النظام</h1>
+  <p class="sub">يفحص تشغيل النظام والمزامنة السحابية ويخبرك بالسبب الدقيق إن وُجد خلل.</p>
+  <p class="sub"><a href="index.html" style="color:var(--pri)">← رجوع إلى النظام</a></p>
+
+  <div id="summary" class="sum wait">جارٍ الفحص…</div>
+
+  <div class="card">
+    <h2>١. تشغيل النظام</h2>
+    <div id="envChecks"></div>
+  </div>
+
+  <div class="card">
+    <h2>٢. المزامنة السحابية</h2>
+    <p class="sub" style="margin:0 0 12px">
+      أدخل بيانات الحساب الذي ستستخدمه. إن لم يكن موجوداً سيُنشأ تلقائياً عند أول دخول.
+    </p>
+    <div class="grid">
+      <div><label for="em">البريد الإلكتروني</label><input type="email" id="em" placeholder="you@example.com" autocomplete="username"></div>
+      <div><label for="pw">كلمة المرور</label><input type="password" id="pw" placeholder="6 أحرف على الأقل" autocomplete="current-password"></div>
+    </div>
+    <div style="margin-top:12px"><button id="run">فحص المزامنة</button></div>
+  </div>
+
+  <div class="card" id="logCard" style="display:none">
+    <h2>التفاصيل التقنية</h2>
+    <div id="syncChecks"></div>
+    <div id="rawWrap" style="margin-top:12px;display:none">
+      <label>الخطأ الخام (للتشخيص)</label>
+      <pre id="raw"></pre>
+    </div>
+  </div>
+</div>
+
+<script src="sync.js"></script>
+<script>
+(function () {
+  'use strict';
+  const $ = s => document.querySelector(s);
+  const sync = window.ADMHSync;
+  let failures = 0, warnings = 0;
+
+  function line(host, state, title, detail) {
+    const d = document.createElement('div');
+    d.className = 'row ' + state;
+    const icon = state === 'ok' ? '✓' : state === 'bad' ? '✕' : state === 'warn' ? '!' : '…';
+    d.innerHTML = `<span class="ic">${icon}</span><span class="txt"><b></b><small></small></span>`;
+    d.querySelector('b').textContent = title;
+    d.querySelector('small').textContent = detail || '';
+    $(host).appendChild(d);
+    return d;
+  }
+
+  /* ---------------------------------------------- ١. فحص التشغيل */
+  line('#envChecks', 'ok', 'صفحة الفحص', 'محمّلة من: ' + (location.host || location.protocol));
+
+  const proto = location.protocol;
+  line('#envChecks', proto === 'https:' || proto === 'http:' ? 'ok' : 'warn',
+    'بروتوكول الصفحة', proto + (proto === 'file:' ? ' — التثبيت كتطبيق يعمل فقط عبر https' : ''));
+
+  const syncCfg = sync && sync.embeddedConfig ? sync.embeddedConfig() : null;
+  if (syncCfg) {
+    line('#envChecks', 'ok', 'إعدادات Firebase مضمّنة', 'المشروع: ' + syncCfg.projectId);
+  } else {
+    failures++;
+    line('#envChecks', 'bad', 'إعدادات Firebase مفقودة', 'لم تُقرأ الإعدادات من sync.js');
+  }
+
+  if ('serviceWorker' in navigator) {
+    navSW();
+  } else {
+    warnings++;
+    line('#envChecks', 'warn', 'عامل الخدمة', 'غير مدعوم في هذا المتصفح — العمل بلا إنترنت لن يعمل');
+  }
+
+  function navSW() {
+    navigator.serviceWorker.getRegistration().then(reg => {
+      if (reg && reg.active) {
+        line('#envChecks', 'ok', 'عامل الخدمة مُسجَّل', 'النظام يعمل بلا إنترنت بعد أول زيارة');
+      } else if (location.protocol === 'file:') {
+        warnings++;
+        line('#envChecks', 'warn', 'عامل الخدمة', 'لا يعمل عبر file:// — افتح الموقع عبر http/https');
+      } else {
+        warnings++;
+        line('#envChecks', 'warn', 'عامل الخدمة غير مُسجَّل', 'أعد تحميل الصفحة مرة، أو تأكد أنه لم يُعطَّل في المتصفح');
+      }
+    }).catch(() => line('#envChecks', 'warn', 'عامل الخدمة', 'تعذّر الاستعلام عنه'));
+  }
+
+  try {
+    localStorage.setItem('__t', '1'); localStorage.removeItem('__t');
+    line('#envChecks', 'ok', 'التخزين المحلي', 'متاح — التقارير تُحفظ على هذا الجهاز');
+  } catch (e) {
+    failures++;
+    line('#envChecks', 'bad', 'التخزين المحلي محظور', 'المتصفح يمنع الحفظ (وضع التصفح الخاص؟) — لن تُحفظ التقارير');
+  }
+
+  line('#envChecks', 'ok', 'مولّد ملفات Word', window.docx ? 'مكتبة docx محمّلة' : 'لم تُحمَّل في هذه الصفحة (طبيعي)');
+
+  if (failures) setSummary('bad', 'هناك ' + failures + ' مشكلة تمنع التشغيل');
+  else if (warnings) setSummary('warn', 'النظام يعمل مع ' + warnings + ' تنبيه');
+  else setSummary('ok', 'النظام يعمل بشكل سليم — افحص المزامنة أدناه');
+
+  function setSummary(cls, text) {
+    const el = $('#summary');
+    el.className = 'sum ' + cls;
+    el.textContent = text;
+  }
+
+  /* ---------------------------------------- ٢. فحص المزامنة */
+  $('#run').addEventListener('click', function () {
+    const S = sync;
+    if (!S) { alert('وحدة المزامنة غير محمّلة'); return; }
+
+    const email = $('#em').value.trim();
+    const pw = $('#pw').value;
+    if (!email || !pw) { alert('أدخل البريد وكلمة المرور'); return; }
+
+    this.disabled = true;
+    this.textContent = 'جارٍ الفحص…';
+    $('#logCard').style.display = '';
+    $('#syncChecks').innerHTML = '';
+    $('#rawWrap').style.display = 'none';
+    let syncFails = 0;
+
+    line('#syncChecks', 'wait', 'تحميل مكتبة Firebase واختبار الدخول', 'قد يستغرق بضع ثوانٍ');
+
+    S.connect(email, pw).then(cred => {
+      $('#syncChecks').innerHTML = '';
+      line('#syncChecks', 'ok', 'الاتصال بـ Firebase', 'الحساب: ' + (cred.email || cred.uid));
+
+      line('#syncChecks', 'wait', 'اختبار قراءة وكتابة Firestore', '');
+      return S.syncNow().then(res => {
+        $('#syncChecks').querySelectorAll('.wait').forEach(e => e.remove());
+        line('#syncChecks', 'ok', 'المزامنة تعمل',
+          `عدد التقارير: ${res.total} · أُضيف ${res.added} · حُدّث ${res.updated} · حُذف ${res.removed}`);
+        setSummary('ok', 'كل شيء يعمل — بدء المزامنة ناجح');
+        return true;
+      }).catch(err => {
+        $('#syncChecks').querySelectorAll('.wait').forEach(e => e.remove());
+        syncFails++;
+        line('#syncChecks', 'bad', 'فشلت قراءة/كتابة Firestore', err.message);
+        showRaw(err);
+        setSummary('bad', 'المزامنة فشلت — اقرأ السبب أدناه');
+        return false;
+      });
+    }).catch(err => {
+      $('#syncChecks').innerHTML = '';
+      line('#syncChecks', 'bad', 'فشل الاتصال بـ Firebase', err.message);
+      showRaw(err);
+      setSummary('bad', 'فشل الاتصال — اقرأ السبب أدناه');
+    }).then(() => {
+      $('#run').disabled = false;
+      $('#run').textContent = 'فحص المزامنة';
+    });
+
+    function showRaw(err) {
+      $('#rawWrap').style.display = '';
+      $('#raw').textContent = JSON.stringify({
+        code: err && err.code,
+        name: err && err.name,
+        message: (err && err.message) || String(err),
+        host: location.host,
+        protocol: location.protocol
+      }, null, 2);
+    }
+  });
+})();
+</script>
+</body>
+</html>

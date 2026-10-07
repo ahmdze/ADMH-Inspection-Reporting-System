@@ -372,24 +372,62 @@
     }).catch(err => {
       const msg = friendlyError(err);
       setState({ busy: false, error: msg });
-      throw new Error(msg);
+      throw taggedError(err, msg);
     });
   }
+  /** خطأ برسالة عربية واضحة، مع الحفاظ على رمز الخطأ الأصلي للتشخيص */
+  function taggedError(orig, friendly) {
+    const e = new Error(friendly);
+    if (orig && orig.code) e.code = orig.code;
+    if (orig && orig.message && orig.message !== friendly) e.rawMessage = orig.message;
+    if (orig && orig.name) e.name = orig.name;
+    return e;
+  }
 
+  /** رسائل خطأ عملية: كل واحدة تقول ما يجب فعله بالضبط في لوحة Firebase */
   function friendlyError(err) {
     const code = (err && err.code) || '';
-    if (code === 'permission-denied' || /insufficient permissions/i.test(String(err && err.message))) {
-      return 'رفض الخادم العملية — تحقق من قواعد الأمان في Firestore';
+    const msg = String((err && err.message) || '');
+
+    if (code === 'auth/unauthorized-domain' || /unauthorized domain/i.test(msg)) {
+      return 'هذا النطاق غير مصرّح به في Firebase. افتح: Authentication ← Settings ← Authorized domains ← Add domain، وأضف نطاق موقعك (مثال: your-project.pages.dev).';
     }
-    if (code === 'unavailable' || /offline/i.test(String(err && err.message))) return 'لا يوجد اتصال بالإنترنت';
-    if (code === 'auth/operation-not-allowed') return 'طريقة الدخول غير مُفعَّلة في لوحة Firebase (Authentication)';
-    if (code === 'auth/unauthorized-domain') return 'النطاق الحالي غير مصرّح به في Firebase (Authorized domains)';
-    if (code === 'auth/popup-blocked') return 'المتصفح منع نافذة الدخول — اسمح بالنوافذ المنبثقة';
-    return (err && err.message) ? err.message : 'خطأ غير معروف';
+    if (code === 'auth/operation-not-allowed' || /operation-not-allowed/i.test(msg)) {
+      return 'تسجيل الدخول بالبريد وكلمة المرور غير مُفعَّل. افتح: Authentication ← Sign-in method ← فعّل Email/Password.';
+    }
+    if (code === 'auth/configuration-not-found' || /configuration-not-found/i.test(msg)) {
+      return 'لم تُهيَّأ Authentication بعد. افتح: Firebase ← Authentication ← Get started.';
+    }
+    if (code === 'auth/email-already-in-use') {
+      return 'هذا البريد مسجّل بكلمة مرور مختلفة. استخدم كلمة المرور الصحيحة، أو أعد تعيينها من Firebase.';
+    }
+    if (code === 'auth/weak-password') {
+      return 'كلمة المرور ضعيفة — استخدم 6 أحرف على الأقل.';
+    }
+    if (code === 'auth/invalid-email') return 'صيغة البريد الإلكتروني غير صحيحة.';
+    if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') {
+      return 'البريد أو كلمة المرور غير صحيحة.';
+    }
+    if (code === 'permission-denied' || /insufficient permissions/i.test(msg)) {
+      return 'رفض الخادم العملية — قواعد أمان Firestore غير منشورة. افتح: Firestore Database ← Rules ← الصق القواعد من README ← Publish.';
+    }
+    if (code === 'failed-precondition' || /requires an index/i.test(msg) || /database.*not.*exist|does not exist/i.test(msg)) {
+      return 'قاعدة بيانات Firestore غير موجودة. افتح: Firebase ← Firestore Database ← Create database.';
+    }
+    if (code === 'unavailable' || /offline/i.test(msg) || /network/i.test(msg)) {
+      return 'لا يوجد اتصال بالإنترنت — سيعمل التطبيق محلياً وتُزامَن التغييرات لاحقاً.';
+    }
+    if (/firebase/i.test(msg) && /load|fetch|import/i.test(msg)) {
+      return 'تعذّر تحميل مكتبة Firebase — تحقق من الاتصال بالإنترنت.';
+    }
+    return msg || 'خطأ غير معروف';
   }
 
   /* --------------------------------------------------------- الاتصال */
   function connect(email, password) {
+    /* الإعدادات مضمّنة، لذا نضمن وجودها حتى لو لم تُستدعَ init بعد
+       (مثل صفحة الفحص المستقلة). */
+    if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
     setState({ busy: true, error: '' });
     return signIn(email, password).then(user => {
@@ -400,7 +438,7 @@
     }).catch(err => {
       const msg = friendlyError(err);
       setState({ busy: false, error: msg });
-      throw new Error(msg);
+      throw taggedError(err, msg);
     });
   }
 
@@ -416,6 +454,8 @@
       return { ok: true, projectId: c.projectId };
     },
     getConfig() { return cfg; },
+    /** الإعدادات المضمّنة — متاحة قبل init (تستخدمها صفحة الفحص) */
+    embeddedConfig() { return resolveConfig(); },
     disconnect() { return signOut().then(() => clearConfig()); },
     reset() { clearConfig(); },
     connect,

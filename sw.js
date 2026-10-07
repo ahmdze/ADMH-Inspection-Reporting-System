@@ -2,13 +2,14 @@
    عامل الخدمة — تشغيل النظام بلا إنترنت
    ملاحظة: لا تُخزَّن أي بيانات تقارير هنا؛ البيانات في localStorage بالمتصفح.
    ============================================================================= */
-const CACHE = 'admh-reports-v3.0.0';
+const CACHE = 'admh-reports-v3.1.0';
 
 const ASSETS = [
   './',
   './index.html',
   './app.js',
   './sync.js',
+  './check.html',
   './manifest.webmanifest',
   './vendor/docx.umd.js',
   './icons/icon-192.png',
@@ -16,12 +17,30 @@ const ASSETS = [
   './icons/icon-maskable-512.png',
 ];
 
+/* هل تصلح هذه الاستجابة للتخزين؟
+   مهم مع Cloudflare Access: قد تُعاد صفحة تسجيل الدخول بدل الملف المطلوب،
+   وتخزينها يُفسد التطبيق بلا إنترنت. لذا نتحقق من النوع والحالة. */
+function cacheable(req, res) {
+  if (!res || !res.ok) return false;
+  if (res.status !== 200) return false;
+  if (res.type !== 'basic') return false;
+  /* صفحة تسجيل الدخول HTML بينما المطلوب سكربت أو صورة => لا تُخزَّن */
+  const ct = res.headers.get('Content-Type') || '';
+  const url = req.url.split('?')[0];
+  if (/\.(js|mjs)$/.test(url)) return /javascript|ecmascript/i.test(ct);
+  if (/\.(png|jpe?g|svg|webp|ico)$/.test(url)) return /^image\//i.test(ct);
+  if (/\.webmanifest$/.test(url)) return /json|manifest/i.test(ct);
+  return true;
+}
+
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE)
-      /* addAll يفشل كاملاً إذا سقط أي ملف، لذا نضيف كل ملف على حدة */
+      /* نضيف كل ملف على حدة حتى لا يُسقط ملف واحد التخزين كله */
       .then(cache => Promise.all(ASSETS.map(url =>
-        cache.add(new Request(url, { cache: 'reload' })).catch(() => null)
+        fetch(new Request(url, { cache: 'reload', credentials: 'same-origin' }))
+          .then(res => (cacheable({ url }, res) ? cache.put(url, res.clone()).catch(() => {}) : null))
+          .catch(() => null)
       )))
       .then(() => self.skipWaiting())
   );
@@ -47,8 +66,10 @@ self.addEventListener('fetch', event => {
     event.respondWith(
       fetch(req)
         .then(res => {
-          const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+          if (cacheable(req, res)) {
+            const copy = res.clone();
+            caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+          }
           return res;
         })
         .catch(() => caches.match(req).then(r => r || caches.match('./index.html')))
@@ -61,7 +82,7 @@ self.addEventListener('fetch', event => {
     caches.match(req).then(hit => {
       if (hit) return hit;
       return fetch(req).then(res => {
-        if (res && res.status === 200 && res.type === 'basic') {
+        if (cacheable(req, res)) {
           const copy = res.clone();
           caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
         }
