@@ -71,6 +71,12 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
       <b>Authorized domains</b> ← <b>Add domain</b>. النطاق مكتوب في «النطاق الحالي» أعلاه —
       انسخه كما هو بلا <code>https://</code> وبلا أي مسار بعده.
     </div>
+
+    <div class="warnbox" id="standaloneWarn" style="margin-top:9px;display:none">
+      <b>أنت داخل التطبيق المثبَّت.</b> تسجيل الدخول بحساب Google قد يفشل داخل التطبيقات
+      المثبَّتة على الهاتف. إن فشل هنا، افتح الموقع في <b>Chrome</b> مباشرةً وسجّل الدخول،
+      ثم افتح التطبيق المثبَّت وستجد الجلسة محفوظة.
+    </div>
   </div>
 
   <div class="card" id="logCard" style="display:none">
@@ -162,6 +168,19 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
   else if (warnings) setSummary('warn', 'النظام يعمل مع ' + warnings + ' تنبيه');
   else setSummary('ok', 'النظام يعمل بشكل سليم — افحص المزامنة أدناه');
 
+  /* كشف التطبيق المثبَّت (standalone) — فيه يفشل الدخول بحساب Google غالباً */
+  try {
+    const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+      || window.navigator.standalone === true
+      || (document.referrer || '').startsWith('android-app://');
+    if (standalone) {
+      const el = document.getElementById('standaloneWarn');
+      if (el) el.style.display = '';
+      line('#envChecks', 'warn', 'التطبيق المثبَّت (standalone)',
+        'الدخول بحساب Google قد يفشل هنا — افتح الموقع في Chrome للتسجيل');
+    }
+  } catch (e) {}
+
   /* ---------------------------------------------------------------------
      عالج نتيجة إعادة توجيه Google فوراً.
      بدون هذا: العودة من Google لا تُكمل الدخول، ولا تظهر أي رسالة.
@@ -177,11 +196,17 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
         setSummary('ok', 'تم الدخول بنجاح — اضغط «فحص بالبريد» أو جرّب المزامنة من النظام');
       } else {
         const st = sync.status();
-        if (st && st.error) {
+        const re = sync.redirectError ? sync.redirectError() : null;
+        if (re && re.code) {
+          line('#syncChecks', 'bad', 'فشل الدخول بحساب Google — ' + re.code, re.message);
+          showRaw(re);
+          setSummary('bad', 'فشل الدخول (' + re.code + ') — اقرأ السبب أدناه');
+        } else if (st && st.error) {
           line('#syncChecks', 'bad', 'تعذّر إكمال الدخول', st.error);
+          showRaw(st);
           setSummary('bad', 'تعذّر الدخول — اقرأ السبب أدناه');
         } else {
-          line('#syncChecks', 'ok', 'لا توجد إعادة توجيه معلّقة', 'اختر طريقة الدخول أعلاه');
+          line('#syncChecks', 'ok', 'لا توجد إعادة توجيه معلّقة', 'اضغط «فحص بحساب Google» للبدء');
         }
       }
     }).catch(() => {

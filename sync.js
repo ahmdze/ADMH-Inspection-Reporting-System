@@ -44,6 +44,7 @@
     user: null,
     lastSync: null,
     error: '',
+    errorCode: '',
     device: '',
   };
 
@@ -85,7 +86,8 @@
     return {
       configured: state.configured, connected: state.connected, busy: state.busy,
       email: state.user && state.user.email ? state.user.email : (state.user ? 'مستخدم' : ''),
-      lastSync: state.lastSync, error: state.error, device: state.device,
+      lastSync: state.lastSync, error: state.error, errorCode: state.errorCode || '',
+      device: state.device,
     };
   }
 
@@ -289,6 +291,10 @@
     });
   }
 
+  /* آخر خطأ من إعادة التوجيه — تعرضه صفحة الفحص للتشخيص */
+  let lastRedirectError = null;
+  function redirectError() { return lastRedirectError; }
+
   /** يعالج نتيجة إعادة التوجيه إن كنا عائدين من Google */
   function consumeRedirect() {
     if (!cfg) cfg = resolveConfig();
@@ -299,15 +305,21 @@
       return fb.auth.getRedirectResult().then(res => {
         if (res && res.user) {
           state.user = res.user;
-          setState({ connected: true, busy: false, user: res.user, error: '' });
+          lastRedirectError = null;
+          setState({ connected: true, busy: false, user: res.user, error: '', errorCode: '' });
           return res.user;
         }
         return null;
       });
     }).catch(err => {
-      /* لا نُفشل الإقلاع إن لم تكن هناك إعادة توجيه أصلاً */
+      /* لا نُفشل الإقلاع إن لم تكن هناك إعادة توجيه أصلاً، لكن نُظهر السبب
+         الحقيقي بدل كتمه — وإلا بقي المستخدم بلا أي تفسير. */
       const code = (err && err.code) || '';
-      if (code && code !== 'auth/no-auth-event') setState({ busy: false, error: friendlyError(err) });
+      if (code && code !== 'auth/no-auth-event') {
+        const e = taggedError(err, friendlyError(err));
+        lastRedirectError = { code: code, message: (err && err.message) || String(err) };
+        setState({ busy: false, error: e.message, errorCode: code });
+      }
       return null;
     });
   }
@@ -646,6 +658,8 @@
     requestReset,
     /** يُعالج نتيجة إعادة التوجيه عند العودة من Google */
     consumeRedirect,
+    /** آخر خطأ من إعادة التوجيه (للتشخيص) */
+    redirectError,
     /** يضمن تثبيت الخطّافات (للصفحات المستقلة) */
     ensureInit,
     signOut,
