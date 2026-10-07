@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '4.2.0';
+const APP_VERSION = '5.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -464,9 +464,9 @@ function renderAll() {
 
   /* المسؤولون — القائمة #dlRoles معرّفة خارج الجدول وتملؤها fillDatalists */
   renderRows('#tOfficials tbody', 'officials', state.report.officials, (d) => `
-      <td><input type="text" data-k="role" list="dlRoles" value="${esc(d.role || '')}" placeholder="اكتب أو اختر"></td>
-      <td><input type="text" data-k="job" list="dlJobs" value="${esc(d.job || '')}"></td>
-      <td><input type="text" data-k="name" value="${esc(d.name || '')}"></td>`);
+      <td data-label="الصفة / المنصب"><input type="text" data-k="role" list="dlRoles" value="${esc(d.role || '')}" placeholder="اكتب أو اختر"></td>
+      <td data-label="العنوان الوظيفي"><input type="text" data-k="job" list="dlJobs" value="${esc(d.job || '')}"></td>
+      <td data-label="الاسم الثلاثي"><input type="text" data-k="name" value="${esc(d.name || '')}"></td>`);
 
   /* الملاك */
   renderStaff();
@@ -485,28 +485,28 @@ function renderAll() {
 
   /* الإجراءات */
   renderRows('#tProcs tbody', 'procedures', state.report.procedures, (d, i) => `
-    <td><input type="date" data-k="date" value="${esc(d.date || '')}"></td>
-    <td><select data-k="kind">
+    <td data-label="التاريخ"><input type="date" data-k="date" value="${esc(d.date || '')}"></td>
+    <td data-label="نوع التدقيق"><select data-k="kind">
       ${L.get('procedureKinds').map(k => `<option${d.kind === k ? ' selected' : ''}>${esc(k)}</option>`).join('')}
     </select></td>
-    <td><input type="text" data-k="source" placeholder="مثال: موظفي المركز / الأطباء الاختصاص" value="${esc(d.source || '')}"></td>
-    <td><input type="text" data-k="note" placeholder="اختياري" value="${esc(d.note || '')}"></td>`);
+    <td data-label="جهة السحب / المصدر"><input type="text" data-k="source" placeholder="مثال: موظفي المركز" value="${esc(d.source || '')}"></td>
+    <td data-label="ملاحظة إضافية"><input type="text" data-k="note" placeholder="اختياري" value="${esc(d.note || '')}"></td>`);
 
   /* التوصيات السابقة */
   renderRows('#tPrevRecs tbody', 'prevRecs', state.report.prevRecs, d => `
     <td class="num"></td>
-    <td><textarea data-k="text" rows="2">${esc(d.text || '')}</textarea></td>
-    <td><select data-k="status">
+    <td data-label="التوصية السابقة"><textarea data-k="text" rows="2">${esc(d.text || '')}</textarea></td>
+    <td data-label="الحالة"><select data-k="status">
       ${L.get('prevRecStatuses').map(s => `<option${d.status === s ? ' selected' : ''}>${esc(s)}</option>`).join('')}
     </select></td>
-    <td><input type="text" data-k="note" value="${esc(d.note || '')}"></td>`, true);
+    <td data-label="ملاحظة"><input type="text" data-k="note" value="${esc(d.note || '')}"></td>`, true);
 
   /* التوقيعات */
   renderRows('#tSigners tbody', 'signers', state.report.signers, d => `
     <td class="num"></td>
-    <td><input type="text" data-k="name" value="${esc(d.name || '')}"></td>
-    <td><input type="text" data-k="job" list="dlJobs" value="${esc(d.job || '')}"></td>
-    <td><input type="date" data-k="date" value="${esc(d.date || '')}"></td>`);
+    <td data-label="الاسم الثلاثي"><input type="text" data-k="name" value="${esc(d.name || '')}"></td>
+    <td data-label="العنوان الوظيفي"><input type="text" data-k="job" list="dlJobs" value="${esc(d.job || '')}"></td>
+    <td data-label="التاريخ"><input type="date" data-k="date" value="${esc(d.date || '')}"></td>`);
 
   /* الحقول المفردة */
   setVal('#f_facilityName', state.report.facilityName);
@@ -568,9 +568,9 @@ function renderStaff() {
   tb.innerHTML = keys.map(k => {
     const v = state.report.staff[k];
     return `<tr data-k="${esc(k)}">
-      <td><input type="text" data-f="cat" value="${esc(k)}"></td>
-      <td><input type="number" min="0" inputmode="numeric" data-f="total" value="${esc(v.total)}"></td>
-      <td><input type="number" min="0" inputmode="numeric" data-f="actual" value="${esc(v.actual)}"></td>
+      <td data-label="الفئة"><input type="text" data-f="cat" value="${esc(k)}"></td>
+      <td data-label="الملاك الكلي"><input type="number" min="0" inputmode="numeric" data-f="total" value="${esc(v.total)}"></td>
+      <td data-label="الملاك الفعلي"><input type="number" min="0" inputmode="numeric" data-f="actual" value="${esc(v.actual)}"></td>
     </tr>`;
   }).join('');
 }
@@ -591,8 +591,8 @@ function renderRecords() {
     return `
     <tr data-i="${i}">
       <td class="num">${i + 1}</td>
-      <td><input type="text" data-f="name" value="${esc(r.name || '')}"></td>
-      <td>
+      <td data-label="اسم السجل"><input type="text" data-f="name" value="${esc(r.name || '')}"></td>
+      <td data-label="التقييم">
         <div class="pbody" data-rec-picks="${i}">${chips}</div>
         <textarea data-f="eval" data-manual="${i}" rows="2" placeholder="تقييم مكتوب بيدك (اختياري) — يُضاف إلى ما اخترته أعلاه">${esc(r.evalManual || '')}</textarea>
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
@@ -649,9 +649,9 @@ function renderPositions() {
           ${rows.length ? `<div class="tw" style="margin-top:0">
             <table style="min-width:440px"><tbody>
             ${rows.map((it, ii) => `<tr data-pi="${pi}" data-cat="${c.k}" data-ii="${ii}">
-              ${c.hasJob ? `<td style="width:34%"><input type="text" data-it="job" list="dlJobs" placeholder="العنوان الوظيفي" value="${esc(it.job || '')}"></td>` : ''}
-              <td><input type="text" data-it="name" placeholder="الاسم الثلاثي" value="${esc(it.name || '')}"></td>
-              <td style="width:34%"><input type="text" data-it="note" placeholder="ملاحظة (اختياري)" value="${esc(it.note || '')}"></td>
+              ${c.hasJob ? `<td data-label="العنوان الوظيفي"><input type="text" data-it="job" list="dlJobs" placeholder="مثال: م. طبي" value="${esc(it.job || '')}"></td>` : ''}
+              <td data-label="الاسم الثلاثي"><input type="text" data-it="name" placeholder="الاسم" value="${esc(it.name || '')}"></td>
+              <td data-label="ملاحظة"><input type="text" data-it="note" placeholder="اختياري" value="${esc(it.note || '')}"></td>
               <td class="no-print" style="width:48px"><button class="btn danger icon" data-pdel="${pi}|${c.k}|${ii}">✕</button></td>
             </tr>`).join('')}
             </tbody></table></div>` : ''}
@@ -741,24 +741,24 @@ function rerender(part) {
     <td><input type="text" data-k="job" list="dlJobs" value="${esc(d.job || '')}"></td>
     <td><input type="text" data-k="name" value="${esc(d.name || '')}"></td>`);
   else if (part === 'procedures') renderRows('#tProcs tbody', 'procedures', state.report.procedures, (d) => `
-    <td><input type="date" data-k="date" value="${esc(d.date || '')}"></td>
-    <td><select data-k="kind">
+    <td data-label="التاريخ"><input type="date" data-k="date" value="${esc(d.date || '')}"></td>
+    <td data-label="نوع التدقيق"><select data-k="kind">
       ${L.get('procedureKinds').map(k => `<option${d.kind === k ? ' selected' : ''}>${esc(k)}</option>`).join('')}
     </select></td>
-    <td><input type="text" data-k="source" placeholder="مثال: موظفي المركز / الأطباء الاختصاص" value="${esc(d.source || '')}"></td>
-    <td><input type="text" data-k="note" placeholder="اختياري" value="${esc(d.note || '')}"></td>`);
+    <td data-label="جهة السحب / المصدر"><input type="text" data-k="source" placeholder="مثال: موظفي المركز" value="${esc(d.source || '')}"></td>
+    <td data-label="ملاحظة إضافية"><input type="text" data-k="note" placeholder="اختياري" value="${esc(d.note || '')}"></td>`);
   else if (part === 'prevRecs') renderRows('#tPrevRecs tbody', 'prevRecs', state.report.prevRecs, d => `
     <td class="num"></td>
-    <td><textarea data-k="text" rows="2">${esc(d.text || '')}</textarea></td>
-    <td><select data-k="status">
+    <td data-label="التوصية السابقة"><textarea data-k="text" rows="2">${esc(d.text || '')}</textarea></td>
+    <td data-label="الحالة"><select data-k="status">
       ${L.get('prevRecStatuses').map(s => `<option${d.status === s ? ' selected' : ''}>${esc(s)}</option>`).join('')}
     </select></td>
-    <td><input type="text" data-k="note" value="${esc(d.note || '')}"></td>`, true);
+    <td data-label="ملاحظة"><input type="text" data-k="note" value="${esc(d.note || '')}"></td>`, true);
   else if (part === 'signers') renderRows('#tSigners tbody', 'signers', state.report.signers, d => `
     <td class="num"></td>
-    <td><input type="text" data-k="name" value="${esc(d.name || '')}"></td>
-    <td><input type="text" data-k="job" list="dlJobs" value="${esc(d.job || '')}"></td>
-    <td><input type="date" data-k="date" value="${esc(d.date || '')}"></td>`);
+    <td data-label="الاسم الثلاثي"><input type="text" data-k="name" value="${esc(d.name || '')}"></td>
+    <td data-label="العنوان الوظيفي"><input type="text" data-k="job" list="dlJobs" value="${esc(d.job || '')}"></td>
+    <td data-label="التاريخ"><input type="date" data-k="date" value="${esc(d.date || '')}"></td>`);
   else if (part === 'records') renderRecords();
   else if (part === 'general') renderGeneral();
   else if (part === 'positions') renderPositions();
@@ -1675,7 +1675,7 @@ function renderListEditor() {
     values.map((v, i) => `
       <tr>
         <td class="num" style="width:52px">${i + 1}</td>
-        <td><input type="text" data-listval="${i}" value="${esc(v)}"></td>
+        <td data-label="القيمة"><input type="text" data-listval="${i}" value="${esc(v)}"></td>
         <td class="no-print" style="width:190px;white-space:nowrap">
           <button class="btn ghost sm" data-listmove="${i}|-1" title="تحريك لأعلى" ${i === 0 ? 'disabled' : ''}>أعلى</button>
           <button class="btn ghost sm" data-listmove="${i}|1" title="تحريك لأسفل" ${i === values.length - 1 ? 'disabled' : ''}>أسفل</button>

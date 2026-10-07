@@ -230,10 +230,68 @@
     return provider;
   }
 
-  /** الدخول بحساب Google — للبريد المسجّل بمزوّد Google */
+  /** هل الجهاز محمول؟ نوافذ Google المنبثقة غير موثوقة على الهواتف. */
+  function isMobile() {
+    try {
+      const ua = (global.navigator && global.navigator.userAgent) || '';
+      if (/Android|iPhone|iPad|iPod|Mobile|Opera Mini|IEMobile/i.test(ua)) return true;
+      /* شاشة صغيرة = غالباً هاتف */
+      if (global.innerWidth && global.innerWidth < 640) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  /** الدخول بحساب Google.
+   *  على الهاتف نستخدم إعادة التوجيه (redirect) لأن النوافذ المنبثقة
+   *  تُحجب أو تفشل بـ auth/internal-error على كثير من المتصفحات المحمولة. */
   function signInGoogle() {
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
-    return initFirebase().then(() => fb.auth.signInWithPopup(googleProvider()));
+    return initFirebase().then(() => {
+      const provider = googleProvider();
+
+      /* ينفّذ إعادة التوجيه. في المتصفح تُغادر الصفحة فلا يعود الوعد أبداً،
+         لكن نُبقي مساراً آمناً: إن عاد الوعد (بيئة لا تُوجّه فعلاً) نرمي
+         خطأً واضحاً بدل التعليق الصامت. */
+      const goRedirect = () => fb.auth.signInWithRedirect(provider).then(() => {
+        const e = new Error('لم تكتمل إعادة التوجيه إلى Google. افتح الموقع في Chrome أو Safari مباشرةً.');
+        e.code = 'auth/redirect-did-not-navigate';
+        throw e;
+      });
+
+      if (isMobile() && fb.auth.signInWithRedirect) {
+        setState({ busy: true, error: '' });
+        return goRedirect();
+      }
+
+      return fb.auth.signInWithPopup(provider).catch(err => {
+        const code = (err && err.code) || '';
+        /* بعض المتصفحات تفشل في النافذة المنبثقة: انتقل إلى إعادة التوجيه */
+        if ((code === 'auth/popup-blocked' || code === 'auth/internal-error'
+             || code === 'auth/operation-not-supported-in-this-environment'
+             || code === 'auth/cancelled-popup-request') && fb.auth.signInWithRedirect) {
+          return goRedirect();
+        }
+        throw err;
+      });
+    });
+  }
+
+  /** يعالج نتيجة إعادة التوجيه إن كنا عائدين من Google */
+  function consumeRedirect() {
+    if (!fb.auth || !fb.auth.getRedirectResult) return Promise.resolve(null);
+    return fb.auth.getRedirectResult().then(res => {
+      if (res && res.user) {
+        state.user = res.user;
+        setState({ connected: true, busy: false, user: res.user, error: '' });
+        return res.user;
+      }
+      return null;
+    }).catch(err => {
+      /* لا نُفشل الإقلاع إن لم تكن هناك إعادة توجيه أصلاً */
+      const code = (err && err.code) || '';
+      if (code && code !== 'auth/no-auth-event') setState({ busy: false, error: friendlyError(err) });
+      return null;
+    });
   }
 
   /** إرسال رابط إعادة تعيين كلمة المرور */
@@ -460,6 +518,12 @@
         || code === 'auth/invalid-login-credentials' || code === 'auth/user-not-found') {
       return 'البريد أو كلمة المرور غير صحيحة. إن كنت أنشأت الحساب بحساب Google فاستخدم زر «الدخول بحساب Google»، أو أرسل رابط إعادة تعيين كلمة المرور.';
     }
+    if (code === 'auth/internal-error' || /internal-error/i.test(msg)) {
+      return 'خطأ داخلي من Firebase. أسبابه الشائعة: نافذة الدخول فُتحت داخل تطبيق مضمّن أو متصفح داخلي. افتح الموقع في Chrome أو Safari مباشرةً، أو استخدم زر الدخول بحساب Google (يُعيد التوجيه تلقائياً على الهاتف).';
+    }
+    if (code === 'auth/operation-not-supported-in-this-environment') {
+      return 'هذه البيئة لا تدعم نوافذ الدخول المنبثقة. افتح الموقع في متصفح كامل (Chrome أو Safari) خارج أي تطبيق مضمّن.';
+    }
     if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
       return 'أُغلقت نافذة الدخول قبل إتمام العملية. أعد المحاولة.';
     }
@@ -568,16 +632,20 @@
          ومهلة أمان حتى لا تتعلّق الواجهة إن تعذّر الوصول إلى Firebase. */
       sessionPromise = Promise.race([
         initFirebase().then(() => new Promise(resolve => {
-          let settled = false;
-          const unsub = fb.auth.onAuthStateChanged(user => {
-            if (settled) return;
-            settled = true;
-            if (typeof unsub === 'function') unsub();
-            if (user) {
-              state.user = user;
-              setState({ connected: true, error: '' });
-              resolve(true);
-            } else resolve(false);
+          /* أولاً: هل عدنا من إعادة توجيه Google؟ */
+          consumeRedirect().then(user => {
+            if (user) { resolve(true); return; }
+            let settled = false;
+            const unsub = fb.auth.onAuthStateChanged(u => {
+              if (settled) return;
+              settled = true;
+              if (typeof unsub === 'function') unsub();
+              if (u) {
+                state.user = u;
+                setState({ connected: true, error: '' });
+                resolve(true);
+              } else resolve(false);
+            });
           });
         })),
         new Promise(resolve => setTimeout(() => resolve(false), 3500)),

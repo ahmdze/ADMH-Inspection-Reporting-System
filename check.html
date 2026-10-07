@@ -204,7 +204,6 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
         return true;
       }).catch(err => {
         $('#syncChecks').querySelectorAll('.wait').forEach(e => e.remove());
-        syncFails++;
         line('#syncChecks', 'bad', 'فشلت قراءة/كتابة Firestore', err.message);
         showRaw(err);
         setSummary('bad', 'المزامنة فشلت — اقرأ السبب أدناه');

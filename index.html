@@ -207,6 +207,102 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .bar .grow{flex:1;min-width:150px}
 .pill{background:var(--hover);border-radius:999px;padding:3px 10px;font-size:.78em;color:var(--muted)}
+
+/* =============================================================================
+   الهاتف: تحويل جداول الإدخال إلى بطاقات
+   -----------------------------------------------------------------------------
+   الجداول أعرض من الشاشة، فكان المستخدم يضطر للسحب أفقياً ليرى بقية الحقول،
+   وكانت عناوين الأعمدة تُقطع. هنا يتحول كل صف إلى بطاقة، وكل حقل يأخذ
+   سطراً كاملاً بعنوانه فوقه (من data-label).
+   الجداول تُبنى كما هي؛ التغيير في العرض فقط. الطباعة وسطح المكتب بلا تغيير.
+   ============================================================================= */
+@media(max-width:768px){
+  /* لا سحب أفقي داخل أقسام النماذج */
+  .tw{overflow-x:visible;border:0;border-radius:0;margin-top:8px}
+
+  .tw>table,
+  #positions table,
+  #recGroups table,
+  #libList table,
+  #listEditor table{display:block;min-width:0!important;width:100%;border:0}
+
+  /* رأس الجدول: مخفي (العناوين تظهر فوق كل حقل) */
+  .tw>table>thead,
+  #positions table>thead,
+  #listEditor table>thead{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+  .tw>table>tbody,
+  #positions table>tbody,
+  #listEditor table>tbody{display:block}
+
+  /* كل صف = بطاقة */
+  .tw>table>tbody>tr,
+  #positions table>tbody>tr,
+  #listEditor table>tbody>tr{
+    display:block;position:relative;
+    border:1px solid var(--border);border-radius:10px;
+    background:var(--card);padding:10px 12px;margin-bottom:10px;
+  }
+  .tw>table>tbody>tr:hover td{background:transparent}
+  .tw>table>tbody>tr:nth-child(even) td{background:var(--hover)}
+  .tw>table>tbody>tr:nth-child(even){background:var(--hover)}
+
+  /* كل خلية = حقل كامل العرض بعنوانه */
+  .tw>table>tbody>tr>td,
+  #positions table>tbody>tr>td,
+  #listEditor table>tbody>tr>td{
+    display:block;width:auto!important;min-width:0;
+    border:0;background:transparent!important;padding:0;margin-bottom:10px;
+  }
+  .tw>table>tbody>tr>td:last-child,
+  #positions table>tbody>tr>td:last-child,
+  #listEditor table>tbody>tr>td:last-child{margin-bottom:0}
+
+  /* رقم الصف: كشارة صغيرة في الزاوية */
+  .tw>table>tbody>tr>td.num,
+  #listEditor table>tbody>tr>td.num{
+    position:absolute;top:9px;inset-inline-start:10px;width:auto!important;
+    margin:0;background:var(--primary-2)!important;color:#fff;
+    border-radius:999px;min-width:26px;height:26px;line-height:26px;
+    text-align:center;font-size:.78em;font-weight:700;z-index:1;
+  }
+  /* اترك مكاناً للشارة حتى لا يغطّيها الحقل */
+  .tw>table>tbody>tr>td.num+td{padding-inline-start:36px}
+
+  /* عنوان الحقل فوق القيمة */
+  .tw>table>tbody>tr>td[data-label]::before,
+  #positions table>tbody>tr>td[data-label]::before,
+  #listEditor table>tbody>tr>td[data-label]::before{
+    content:attr(data-label);
+    display:block;margin-bottom:4px;
+    font-size:.79em;font-weight:700;color:var(--muted);
+  }
+
+  /* الحقول تأخذ عرض البطاقة وتكون مريحة للمس */
+  .tw>table>tbody>tr>td input,
+  .tw>table>tbody>tr>td select,
+  .tw>table>tbody>tr>td textarea,
+  #positions table>tbody>tr>td input,
+  #listEditor table>tbody>tr>td input{
+    width:100%;min-width:0;font-size:16px;min-height:46px;padding:11px 12px;
+  }
+  .tw>table>tbody>tr>td textarea{font-size:16px;min-height:82px}
+
+  /* أزرار صف المكتبة: صف أفقي مرتّب */
+  #listEditor table>tbody>tr>td.no-print{display:flex;gap:8px;flex-wrap:wrap}
+  #listEditor table>tbody>tr>td.no-print .btn{flex:1 1 auto}
+
+  /* شريط التمرير داخل قائمة التقييمات الجاهزة */
+  .pbody{max-height:none;border:0;padding:0;background:transparent}
+  .pbody .chip{white-space:normal;max-width:none}
+
+  /* رسالة توضيحية أعلى كل جدول محوَّل */
+  .tw[data-mobile-hint]::before{
+    content:attr(data-mobile-hint);
+    display:block;font-size:.78em;color:var(--muted);margin-bottom:8px;
+  }
+}
+
 @media print{
   body{background:#fff}
   .topbar,.sidenav,.scrim,.no-print,#toasts{display:none!important}
@@ -270,12 +366,10 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             <div class="f">
               <label for="f_facilityName">اسم المؤسسة <span class="req">*</span></label>
               <input type="text" id="f_facilityName" list="dlFacilities" placeholder="مثال: مركز صحي الخناسة">
-              <datalist id="dlFacilities"></datalist>
             </div>
             <div class="f">
               <label for="f_sector">الجهة التابعة (القطاع/الدائرة)</label>
               <input type="text" id="f_sector" list="dlSectors" placeholder="مثال: قطاع المدائن">
-              <datalist id="dlSectors"></datalist>
             </div>
             <div class="f">
               <label for="f_visitDate">تاريخ الزيارة <span class="req">*</span></label>
