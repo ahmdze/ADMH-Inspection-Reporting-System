@@ -265,14 +265,7 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             </div>
             <div class="f">
               <label for="f_facilityKind">نوع المؤسسة</label>
-              <select id="f_facilityKind">
-                <option value="مركز صحي">مركز صحي</option>
-                <option value="مستشفى">مستشفى</option>
-                <option value="قطاع">قطاع</option>
-                <option value="مصحة">مصحة</option>
-                <option value="مذخر أدوية">مذخر أدوية</option>
-                <option value="أخرى">أخرى</option>
-              </select>
+              <select id="f_facilityKind"></select>
             </div>
             <div class="f">
               <label for="f_facilityName">اسم المؤسسة <span class="req">*</span></label>
@@ -338,9 +331,9 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
         <!-- 3 staff -->
         <div class="card">
           <h2><span class="num">3</span> الملاك الكلي والفعلي</h2>
-          <p class="sub">اترك الحقول فارغة للسطور التي لا تريد ظهورها. تُحسب النسبة آلياً.</p>
+          <p class="sub">أدخل الملاك الكلي والفعلي لكل فئة. الفئات الفارغة تماماً لا تظهر في التقرير.</p>
           <div class="tw"><table id="tStaff">
-            <thead><tr><th style="width:40%">الفئة</th><th>الكلي</th><th>الفعلي</th><th>النقص</th><th>النسبة</th></tr></thead>
+            <thead><tr><th style="width:52%">الفئة</th><th>الملاك الكلي</th><th>الملاك الفعلي</th></tr></thead>
             <tbody></tbody>
           </table></div>
         </div>
@@ -372,11 +365,7 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             <div class="f">
               <label for="f_fpDeviceState">حالة الأجهزة</label>
               <input type="text" id="f_fpDeviceState" list="dlDeviceState" placeholder="اكتب أو اختر">
-              <datalist id="dlDeviceState">
-                <option value="صالح للعمل"></option>
-                <option value="عاطل"></option>
-                <option value="بعضها عاطل"></option>
-              </datalist>
+              <datalist id="dlDeviceState"></datalist>
             </div>
             <div class="f">
               <label for="f_fpStaff">عدد كادر البصمة</label>
@@ -392,20 +381,11 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             </div>
             <div class="f">
               <label for="f_fpReportFreq">دورية رفع الموقف</label>
-              <select id="f_fpReportFreq">
-                <option value="">— بدون —</option>
-                <option value="يومياً">يومياً</option>
-                <option value="أسبوعياً">أسبوعياً</option>
-                <option value="شهرياً">شهرياً</option>
-              </select>
+              <select id="f_fpReportFreq"></select>
             </div>
             <div class="f">
               <label for="f_fpReportTo">تُرفع إلى</label>
-              <select id="f_fpReportTo">
-                <option value="">— بدون —</option>
-                <option value="المدير">المدير</option>
-                <option value="القطاع">القطاع</option>
-              </select>
+              <select id="f_fpReportTo"></select>
             </div>
             <div class="f wide">
               <label for="f_fpNotes">ملاحظات إضافية على وحدة البصمة</label>
@@ -557,8 +537,23 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
       <!-- ============ LIBRARY ============ -->
       <section id="view-library" class="hidden">
         <div class="card">
+          <h2>📋 قوائم الاختيار <span class="pill" id="listsCount"></span></h2>
+          <p class="sub">
+            كل قائمة منسدلة أو حقل اقتراح في الموقع تُحرَّر من هنا. أي تعديل ينعكس <b>فوراً</b>
+            على النماذج. لا يوجد خيار مقيّد في الكود.
+          </p>
+          <div class="bar">
+            <select id="listPicker" class="grow"></select>
+            <button class="btn ghost sm" id="btnListAdd">+ إضافة قيمة</button>
+            <button class="btn ghost sm" id="btnListReset">إرجاع هذه القائمة للأصل</button>
+          </div>
+          <p class="hint" id="listHint"></p>
+          <div id="listEditor"></div>
+        </div>
+
+        <div class="card">
           <h2>📚 مكتبة العبارات</h2>
-          <p class="sub">عبارات مصحّحة إملائياً مستخرجة من تقاريرك. تُستخدم في القوائم الجاهزة.</p>
+          <p class="sub">العبارات الجاهزة المستخدمة في التقييمات والتوصيات والملاحظات.</p>
           <div class="bar">
             <select id="libKind" class="grow">
               <option value="records">تقييمات السجلات</option>
@@ -568,6 +563,43 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             <button class="btn sm" id="btnLibAdd">+ إضافة عبارة</button>
           </div>
           <div id="libList"></div>
+        </div>
+
+        <div class="card">
+          <h2>💾 نقل القوائم بين الأجهزة</h2>
+
+          <div class="okbox" style="margin-bottom:12px">
+            <b>لتثبيت تعديلاتك كأصل دائم على كل الأجهزة:</b>
+            <ol style="margin:8px 0 0;padding-inline-start:20px;line-height:1.9">
+              <li>اضغط <b>«حفظ القيم كأصل (تنزيل options.js)»</b> — يُنزَّل ملف بالقيم الحالية.</li>
+              <li>ضعه في مجلد المشروع مكان <code>options.js</code> القديم.</li>
+              <li>ارفعه إلى GitHub (commit + push).</li>
+            </ol>
+            <p style="margin:8px 0 0">
+              بعدها تفتح كل الأجهزة القيم الجديدة تلقائياً — بلا تعديل على أي جهاز آخر.
+            </p>
+          </div>
+
+          <div class="warnbox" style="margin-bottom:12px">
+            <b>لماذا تنزيل ملف ولا كتابة مباشرة؟</b>
+            المتصفح لا يستطيع الكتابة على القرص (عبر <code>file://</code>) ولا على خادم
+            الاستضافة (عبر <code>https</code>). هذه حماية مفروضة على كل المتصفحات، ولا سبيل
+            برمجياً لتجاوزها. لذلك يُنزَّل الملف لترفعه بنفسك.
+          </div>
+
+          <div class="btnrow">
+            <button class="btn ok" id="btnListsSaveDefault">💾 حفظ القيم كأصل (تنزيل options.js)</button>
+          </div>
+          <div class="btnrow" style="margin-top:8px">
+            <button class="btn ghost" id="btnListsExport">⬇️ تصدير القوائم (JSON)</button>
+            <button class="btn ghost" id="btnListsImport">⬆️ استيراد القوائم (JSON)</button>
+            <button class="btn danger" id="btnListsResetAll">إرجاع كل القوائم للأصل</button>
+            <input type="file" id="fileLists" accept=".json,application/json" class="hidden">
+          </div>
+          <p class="hint">
+            «تصدير/استيراد JSON» لنقل القوائم بين أجهزتك بسرعة بلا رفع ملفات.
+            و«حفظ القيم كأصل» لتثبيتها دائماً في المشروع.
+          </p>
         </div>
       </section>
 
@@ -608,14 +640,25 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
           <div class="warnbox hidden" id="syncWarn"></div>
 
           <div id="syncOff">
+            <p class="sub" style="margin:0 0 10px">
+              اختر طريقة الدخول. <b>يجب أن تكون نفس الطريقة على كل أجهزتك</b>،
+              فـ Firebase لا يسمح ببريد واحد على مزوّدين مختلفين.
+            </p>
             <div class="grid">
               <div class="f"><label for="syncEmail">البريد الإلكتروني</label><input type="text" id="syncEmail" placeholder="you@example.com" autocomplete="username"></div>
               <div class="f"><label for="syncPassword">كلمة المرور</label><input type="password" id="syncPassword" placeholder="6 أحرف على الأقل" autocomplete="current-password"></div>
             </div>
+            <div class="btnrow">
+              <button class="btn ok" id="btnSyncConnect">🔑 دخول بالبريد وكلمة المرور</button>
+              <button class="btn ghost" id="btnSyncGoogle">🔵 الدخول بحساب Google</button>
+            </div>
+            <div class="btnrow">
+              <button class="btn ghost sm" id="btnSyncForgot">نسيت كلمة المرور — أرسل رابط إعادة التعيين</button>
+            </div>
             <p class="hint">
-              استخدم البريد نفسه على كل أجهزتك. إن لم يكن الحساب موجوداً سيُنشأ تلقائياً.
+              إن لم يكن الحساب موجوداً سيُنشأ تلقائياً عند أول دخول.
+              وإن كان بريدك مسجّلاً بحساب Google فاستخدم الزر الأزرق.
             </p>
-            <div class="btnrow"><button class="btn ok" id="btnSyncConnect">🔗 تفعيل المزامنة والدخول</button></div>
           </div>
 
           <div id="syncOn" class="hidden">
@@ -697,8 +740,13 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 <div class="modal" id="libModal"><div class="sheet">
   <button class="x" data-close>&times;</button>
   <h3 id="libModalTitle">العبارات الجاهزة</h3>
+  <div class="hint" id="libModalHint" style="margin-bottom:8px"></div>
   <input type="text" id="libFilter" placeholder="تصفية..." style="margin-bottom:10px">
   <div id="libModalList"></div>
+  <div class="btnrow" id="libModalBar" style="position:sticky;bottom:0;background:var(--card);padding-top:10px;margin-top:6px">
+    <button class="btn ok" id="libAddSelected">إضافة المحدد</button>
+    <button class="btn ghost" id="libClearSel">إلغاء التحديد</button>
+  </div>
 </div></div>
 
 <div class="modal" id="bulkModal"><div class="sheet" style="max-width:560px">
@@ -714,6 +762,7 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 </div></div>
 
 <script src="vendor/docx.umd.js"></script>
+<script src="options.js"></script>
 <script src="sync.js"></script>
 <script src="app.js"></script>
 </body>

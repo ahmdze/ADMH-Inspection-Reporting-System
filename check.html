@@ -55,7 +55,17 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
       <div><label for="em">البريد الإلكتروني</label><input type="email" id="em" placeholder="you@example.com" autocomplete="username"></div>
       <div><label for="pw">كلمة المرور</label><input type="password" id="pw" placeholder="6 أحرف على الأقل" autocomplete="current-password"></div>
     </div>
-    <div style="margin-top:12px"><button id="run">فحص المزامنة</button></div>
+    <div style="display:flex;gap:9px;margin-top:12px;flex-wrap:wrap">
+      <button id="run" data-mode="email" style="flex:1 1 210px">فحص بالبريد وكلمة المرور</button>
+      <button id="rung" style="flex:1 1 150px;background:#1565c0">فحص بحساب Google</button>
+    </div>
+    <div style="margin-top:9px">
+      <button id="forgot" style="background:transparent;color:#004d40;border:1px solid #b9c4cc">نسيت كلمة المرور — أرسل رابط إعادة التعيين</button>
+    </div>
+    <p class="sub" style="margin:10px 0 0">
+      <b>مهم:</b> Firebase لا يسمح ببريد واحد على مزوّدين مختلفين. إن أنشأت الحساب بحساب
+      Google فلا تستخدم كلمة المرور، والعكس.
+    </p>
   </div>
 
   <div class="card" id="logCard" style="display:none">
@@ -148,20 +158,25 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
     const S = sync;
     if (!S) { alert('وحدة المزامنة غير محمّلة'); return; }
 
+    const mode = window.__syncMode || 'email';
     const email = $('#em').value.trim();
     const pw = $('#pw').value;
-    if (!email || !pw) { alert('أدخل البريد وكلمة المرور'); return; }
+    if (mode !== 'google') {
+      if (!email) { alert('أدخل البريد الإلكتروني'); return; }
+      if (pw.length < 6) { alert('كلمة المرور 6 أحرف على الأقل'); return; }
+    }
 
-    this.disabled = true;
-    this.textContent = 'جارٍ الفحص…';
+    const btn = this;
+    btn.disabled = true;
+    const origText = btn.textContent;
+    btn.textContent = 'جارٍ الفحص…';
     $('#logCard').style.display = '';
     $('#syncChecks').innerHTML = '';
     $('#rawWrap').style.display = 'none';
-    let syncFails = 0;
 
     line('#syncChecks', 'wait', 'تحميل مكتبة Firebase واختبار الدخول', 'قد يستغرق بضع ثوانٍ');
 
-    S.connect(email, pw).then(cred => {
+    S.connect(email, pw, mode).then(cred => {
       $('#syncChecks').innerHTML = '';
       line('#syncChecks', 'ok', 'الاتصال بـ Firebase', 'الحساب: ' + (cred.email || cred.uid));
 
@@ -186,8 +201,8 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
       showRaw(err);
       setSummary('bad', 'فشل الاتصال — اقرأ السبب أدناه');
     }).then(() => {
-      $('#run').disabled = false;
-      $('#run').textContent = 'فحص المزامنة';
+      btn.disabled = false;
+      btn.textContent = origText;
     });
 
     function showRaw(err) {
@@ -200,6 +215,27 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
         protocol: location.protocol
       }, null, 2);
     }
+  });
+
+  /* زر الدخول بحساب Google — نضبط الوضع في متغيّر قبل الاستدعاء (بلا سباق) */
+  $('#rung').addEventListener('click', function () {
+    window.__syncMode = 'google';
+    try { $('#run').click(); } finally { window.__syncMode = 'email'; }
+  });
+
+  /* إعادة تعيين كلمة المرور */
+  $('#forgot').addEventListener('click', function () {
+    const S = sync;
+    if (!S || !S.requestReset) { alert('وحدة المزامنة غير محمّلة'); return; }
+    const email = $('#em').value.trim();
+    if (!email) { alert('اكتب بريدك في الحقل أولاً'); return; }
+    this.disabled = true;
+    const b = this;
+    S.requestReset(email).then(() => {
+      alert('أُرسل رابط إعادة التعيين إلى بريدك. تفقّد الوارد والبريد المزعج.');
+    }).catch(err => {
+      alert('تعذّر الإرسال: ' + err.message);
+    }).then(() => { b.disabled = false; });
   });
 })();
 </script>

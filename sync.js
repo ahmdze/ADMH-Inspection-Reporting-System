@@ -190,25 +190,56 @@
   }
 
   /** الدخول: Google إن توفّر، وإلا بالبريد وكلمة المرور، وإلا مجهول */
-  function signIn(email, password) {
+  /**
+   * الدخول بالبريد وكلمة المرور.
+   *
+   * قرار مهم: لا نُجرب إنشاء حساب إلا عند auth/user-not-found تحديداً.
+   * كان الكود سابقاً يُنشئ حساباً عند أي فشل — بما فيه كلمة المرور الخاطئة —
+   * فيظهر للمستخدم «البريد مسجّل» بدل «كلمة المرور خاطئة»، وهو تضليل كامل.
+   * (كان هذا خطأً حقيقياً في الكود، اكتُشف من رسالة خطأ المستخدم.)
+   */
+  function signInEmail(email, password) {
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
-    return initFirebase().then(() => {
-      if (email && password) {
-        return fb.auth.signInWithEmailAndPassword(email, password).catch(err => {
-          if (err && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/invalid-login-credentials')) {
-            return fb.auth.createUserWithEmailAndPassword(email, password);
-          }
-          throw err;
-        });
-      }
-      const provider = new global.firebase.auth.GoogleAuthProvider();
-      return fb.auth.signInWithPopup(provider).catch(() =>
-        fb.auth.signInAnonymously()
-      );
-    }).then(cred => {
-      if (!cred || !cred.user) throw new Error('تعذّر تسجيل الدخول');
-      return cred.user;
-    });
+    return initFirebase().then(() =>
+      fb.auth.signInWithEmailAndPassword(email, password).catch(err => {
+        const code = (err && err.code) || '';
+        if (code === 'auth/user-not-found') {
+          /* لا يوجد حساب بهذا البريد — ننشئه */
+          return fb.auth.createUserWithEmailAndPassword(email, password);
+        }
+        /* كلمة مرور خاطئة، أو بريد مسجّل بمزوّد آخر (Google)، أو غير ذلك:
+           نُعيد الخطأ الأصلي كما هو ولا نخمّن. */
+        throw err;
+      })
+    );
+  }
+
+  /** إيجاد مزوّد Google بأمان: firebase.auth.GoogleAuthProvider في نسخة compat */
+  function googleProvider() {
+    const g = global.firebase;
+    const P = (g && g.auth && g.auth.GoogleAuthProvider)
+           || (fb.auth && fb.auth.GoogleAuthProvider)
+           || (g && g.auth && g.auth.GoogleAuthProvider);
+    if (typeof P !== 'function') {
+      const e = new Error('مزوّد الدخول بحساب Google غير متاح في هذه النسخة من المكتبة');
+      e.code = 'auth/operation-not-supported-in-this-environment';
+      throw e;
+    }
+    const provider = new P();
+    if (provider.setCustomParameters) provider.setCustomParameters({ prompt: 'select_account' });
+    return provider;
+  }
+
+  /** الدخول بحساب Google — للبريد المسجّل بمزوّد Google */
+  function signInGoogle() {
+    if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
+    return initFirebase().then(() => fb.auth.signInWithPopup(googleProvider()));
+  }
+
+  /** إرسال رابط إعادة تعيين كلمة المرور */
+  function resetPassword(email) {
+    if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
+    return initFirebase().then(() => fb.auth.sendPasswordResetEmail(email));
   }
 
   function signOut() {
@@ -337,11 +368,14 @@
 
         let mergedSettings = local.settings || null;
         let mergedLibrary = local.library || null;
+        let mergedLists = local.lists || null;
         if (remotePayload && remoteAt > localAt) {
           mergedSettings = remotePayload.settings || mergedSettings;
           mergedLibrary = remotePayload.library || mergedLibrary;
+          mergedLists = remotePayload.lists || mergedLists;
           out.settings = mergedSettings;
           out.library = mergedLibrary;
+          out.lists = mergedLists;
           settingsChanged = true;
         }
 
@@ -359,6 +393,7 @@
             payload: {
               settings: mergedSettings,
               library: mergedLibrary,
+              lists: mergedLists,
             },
           }))
           .then(() => {
@@ -399,14 +434,30 @@
       return 'لم تُهيَّأ Authentication بعد. افتح: Firebase ← Authentication ← Get started.';
     }
     if (code === 'auth/email-already-in-use') {
-      return 'هذا البريد مسجّل بكلمة مرور مختلفة. استخدم كلمة المرور الصحيحة، أو أعد تعيينها من Firebase.';
+      return 'هذا البريد مسجّل مسبقاً بمزوّد دخول آخر (Google غالباً). Firebase لا يسمح ببريد واحد على مزوّدين. الحل: استخدم «الدخول بحساب Google»، أو احذف الحساب من Firebase ← Authentication ← Users وأنشئه من جديد بكلمة مرور، أو استخدم بريداً آخر.';
+    }
+    if (code === 'auth/account-exists-with-different-credential') {
+      return 'هذا البريد مسجّل بمزوّد دخول مختلف. استخدم طريقة الدخول التي أنشأت الحساب أصلاً.';
     }
     if (code === 'auth/weak-password') {
       return 'كلمة المرور ضعيفة — استخدم 6 أحرف على الأقل.';
     }
     if (code === 'auth/invalid-email') return 'صيغة البريد الإلكتروني غير صحيحة.';
-    if (code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/invalid-login-credentials') {
-      return 'البريد أو كلمة المرور غير صحيحة.';
+    if (code === 'auth/wrong-password' || code === 'auth/invalid-credential'
+        || code === 'auth/invalid-login-credentials' || code === 'auth/user-not-found') {
+      return 'البريد أو كلمة المرور غير صحيحة. إن كنت أنشأت الحساب بحساب Google فاستخدم زر «الدخول بحساب Google»، أو أرسل رابط إعادة تعيين كلمة المرور.';
+    }
+    if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+      return 'أُغلقت نافذة الدخول قبل إتمام العملية. أعد المحاولة.';
+    }
+    if (code === 'auth/popup-blocked') {
+      return 'المتصفح منع نافذة الدخول — اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.';
+    }
+    if (code === 'auth/too-many-requests') {
+      return 'محاولات كثيرة فاشلة. انتظر بضع دقائق ثم أعد المحاولة.';
+    }
+    if (code === 'auth/requires-recent-login') {
+      return 'تحتاج إلى إعادة الدخول لتنفيذ هذه العملية.';
     }
     if (code === 'permission-denied' || /insufficient permissions/i.test(msg)) {
       return 'رفض الخادم العملية — قواعد أمان Firestore غير منشورة. افتح: Firestore Database ← Rules ← الصق القواعد من README ← Publish.';
@@ -414,8 +465,9 @@
     if (code === 'failed-precondition' || /requires an index/i.test(msg) || /database.*not.*exist|does not exist/i.test(msg)) {
       return 'قاعدة بيانات Firestore غير موجودة. افتح: Firebase ← Firestore Database ← Create database.';
     }
-    if (code === 'unavailable' || /offline/i.test(msg) || /network/i.test(msg)) {
-      return 'لا يوجد اتصال بالإنترنت — سيعمل التطبيق محلياً وتُزامَن التغييرات لاحقاً.';
+    if (code === 'unavailable' || code === 'auth/network-request-failed'
+        || /offline/i.test(msg) || /network/i.test(msg)) {
+      return 'تعذّر الوصول إلى Firebase — تحقق من اتصال الإنترنت. التطبيق يعمل محلياً وتُزامَن التغييرات لاحقاً.';
     }
     if (/firebase/i.test(msg) && /load|fetch|import/i.test(msg)) {
       return 'تعذّر تحميل مكتبة Firebase — تحقق من الاتصال بالإنترنت.';
@@ -424,21 +476,36 @@
   }
 
   /* --------------------------------------------------------- الاتصال */
-  function connect(email, password) {
+  /**
+   * mode: 'google' للدخول بحساب Google، وأي شيء آخر = بريد وكلمة مرور.
+   */
+  function connect(email, password, mode) {
     /* الإعدادات مضمّنة، لذا نضمن وجودها حتى لو لم تُستدعَ init بعد
        (مثل صفحة الفحص المستقلة). */
     if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
     setState({ busy: true, error: '' });
-    return signIn(email, password).then(user => {
+
+    const attempt = mode === 'google' ? signInGoogle() : signInEmail(email, password);
+
+    return attempt.then(cred => {
+      const user = (cred && cred.user) || cred;
+      if (!user) throw new Error('تعذّر تسجيل الدخول');
       state.user = user;
-      const code = user.email || (user.isAnonymous ? 'مستخدم مجهول' : '');
       setState({ connected: true, busy: false, user, error: '' });
-      return { uid: user.uid, email: code };
+      return { uid: user.uid, email: user.email || (user.isAnonymous ? 'مستخدم مجهول' : '') };
     }).catch(err => {
       const msg = friendlyError(err);
       setState({ busy: false, error: msg });
       throw taggedError(err, msg);
+    });
+  }
+
+  function requestReset(email) {
+    if (!cfg) cfg = resolveConfig();
+    if (!email) return Promise.reject(new Error('أدخل البريد الإلكتروني أولاً'));
+    return resetPassword(email).then(() => true).catch(err => {
+      throw taggedError(err, friendlyError(err));
     });
   }
 
@@ -459,6 +526,7 @@
     disconnect() { return signOut().then(() => clearConfig()); },
     reset() { clearConfig(); },
     connect,
+    requestReset,
     signOut,
     syncNow,
     pushPullRequest,

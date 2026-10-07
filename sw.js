@@ -2,13 +2,14 @@
    عامل الخدمة — تشغيل النظام بلا إنترنت
    ملاحظة: لا تُخزَّن أي بيانات تقارير هنا؛ البيانات في localStorage بالمتصفح.
    ============================================================================= */
-const CACHE = 'admh-reports-v3.1.0';
+const CACHE = 'admh-reports-v4.1.0';
 
 const ASSETS = [
   './',
   './index.html',
   './app.js',
   './sync.js',
+  './options.js',
   './check.html',
   './manifest.webmanifest',
   './vendor/docx.umd.js',

@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '3.0.0';
+const APP_VERSION = '4.1.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -38,7 +38,6 @@ const RECORD_PRESETS = [
   'مُدام وموثق، وغير محدّث، ولا يتم ذكر التشخيص.',
   'مدمجان في سجل واحد، غير محدّث، ويحتاج إلى إعادة تنظيم.',
   'غير مفتوح.',
-  'غير مفتوح، ويحتاج إلى إصدار أمر إداري بفتحه.',
   'لوحظ وجود حك وشطب وتحبير في بعض صفحاته.',
   'غير مُدام ويحتاج إلى استكمال القيود.',
 ];
@@ -60,6 +59,8 @@ const RECORD_ADDONS = [
 /* السجلات الإدارية المعتادة — بالترتيب الشائع في التقارير */
 const RECORD_ROWS = [
   'سجل الحركة',
+  'سجل الصادر',
+  'سجل الوارد',
   'سجل الغياب',
   'سجل الإجازات الاعتيادية القصيرة',
   'سجل الإجازات الاعتيادية الطويلة',
@@ -70,19 +71,13 @@ const RECORD_ROWS = [
   'سجل الإجازات الدراسية',
   'سجل إجازات الـ 5 سنوات',
   'سجل الإجازات الإجبارية',
-  'سجل الصادر',
-  'سجل الوارد',
   'سجل استلام البريد الداخلي',
   'سجل تبليغ الموظفين بالعقوبات',
-  'سجل التشكرات والعقوبات',
-  'سجل العقوبات',
-  'سجل التشكرات',
   'سجل الأمور الانضباطية',
   'سجل العلاوات والترقيات',
   'سجل الملاك',
   'سجل الدورات',
   'سجل التقاعد',
-  'سجل الترقيات',
 ];
 
 /* التوصيات المتكررة في التقارير */
@@ -149,37 +144,62 @@ const GENERAL_PRESETS = [
   'يتم منح استراحات تعويضية للموظفين مقابل قيامهم بواجبات رسمية، وبأوامر إدارية.',
 ];
 
-/* ------------------------------------------------------------ مجموعات التوصيات */
-const RECO_GROUPS = [
-  { key: 'investigation', label: 'شعبة التحقيقات / قسمنا', letter: 'أ', preset: 'الإيعاز إلى شعبة التحقيقات في قسمنا بما يلي:' },
-  { key: 'dept',          label: 'قسم الأمور الإدارية والمالية والقانونية / دائرتنا', letter: 'أ', preset: 'الإيعاز إلى قسم الأمور الإدارية والمالية والقانونية / دائرتنا بما يلي:' },
-  { key: 'sector',        label: 'إدارة القطاع', letter: 'ب', preset: 'الإيعاز إلى إدارة {القطاع} بما يلي:' },
-  { key: 'facility',      label: 'إدارة المؤسسة', letter: 'ج', preset: 'الإيعاز إلى إدارة {المؤسسة} بما يلي:' },
-  { key: 'warehouse',     label: 'مذخر أدوية القطاع', letter: 'د', preset: 'الإيعاز إلى مذخر أدوية القطاع بالعمل على تجهيز الصيدلية بالأدوية الشحيحة والمفقودة الواردة في التقرير؛ لضمان توفير الخدمات العلاجية الأساسية واستمرار رعاية المراجعين.' },
-  { key: 'custom',        label: 'جهة أخرى', letter: '', preset: '' },
-];
+/* ------------------------------------------------------------ مجموعات التوصيات
+   الجهات والحروف مصدرها options.js (قابلة للتعديل من المكتبة).
+   العبارة التمهيدية تُبنى تلقائياً من اسم الجهة، وتدعم {القطاع} و{المؤسسة}. */
+function recoGroups() {
+  const entities = L.get('recommendationEntities');
+  const letters = L.get('recommendationLetters');
+  return entities.map((label, i) => ({
+    key: 'g' + i,
+    label,
+    letter: letters[i] || '',
+    preset: /^جهة أخرى/.test(label) ? '' : `الإيعاز إلى ${label} بما يلي:`,
+  }));
+}
 
-const VISIT_TYPES = ['زيارة تفتيشية', 'زيارة متابعة', 'زيارة مفاجئة', 'زيارة متابعة دوام', 'زيارة تقييمية'];
+/* ---------------------------------------------------------------------------
+   ملاحظة: كل القوائم (أنواع الزيارة، المؤسسات، العناوين الوظيفية، الصفات，
+   فئات الملاك، أنواع الإجراءات، أنواع المواقف، حالات التوصيات، أسماء السجلات，
+   دوريات وجهات رفع الموقف) مصدرها options.js وقابلة للتعديل من
+   «مكتبة العبارات» ← «قوائم الاختيار». لا قائمة مكتوبة هنا.
+   --------------------------------------------------------------------------- */
 
-const STAFF_ROWS = ['الملاك', 'الأطباء', 'أطباء الأسنان', 'الصيادلة', 'تقني طبي', 'ممرضين', 'إداريين'];
+/* فئات المخالفة في مواقف البصمة: المفاتيح ثابتة (يعتمد عليها منطق التقرير
+   والمزامنة) والعناوين قابلة للتعديل من المكتبة. فئة جديدة تُنشأ بمفتاح مشتق. */
+const POSITION_CAT_KEYS = ['absent', 'noExit', 'noEntry', 'noSurprise', 'noBoth'];
 
-const JOB_TITLES = [
-  'مدير المركز', 'م. مدير', 'رئيس أطباء أسنان', 'رئيس أطباء أسنان أقدم', 'طبيب اختصاص', 'طبيب',
-  'طبيب أسنان', 'طبيب أسنان ممارس', 'طبيب أسنان تدرج', 'طبيب تدرج', 'صيدلاني', 'صيدلي', 'م. صيدلاني',
-  'ممرض', 'ممرض ماهر', 'م. طبي', 'تقني طبي', 'تقني أجهزة طبية', 'تقني تحليلات', 'م. مختبر', 'مساعد مختبر أقدم',
-  'م. فني', 'م. فنيين', 'م. جامعي', 'م. ر. بايولوجي', 'ر. م. فنيين', 'ر. م. وقائي أقدم', 'ملاحظ', 'رئيس ملاحظين',
-  'ر. ملاحظين', 'حرفي', 'محاسب', 'ت. بصريات', 'م. مدير', 'كاتب', 'إداري',
-];
+function slugKey(label, taken) {
+  const map = { 'تغيب': 'absent', 'مغادرة': 'noExit', 'دخول': 'noEntry', 'مفاجئة': 'noSurprise', 'بصمتي': 'noBoth' };
+  for (const k in map) if (label.includes(k)) return map[k];
+  let base = 'c' + Math.abs(label.split('').reduce((a, c) => a * 31 + c.charCodeAt(0), 7)).toString(36).slice(0, 6);
+  let key = base, i = 2;
+  while (taken.has(key)) { key = base + i++; }
+  return key;
+}
 
-const OFFICIAL_ROLES = ['مدير المركز', 'مسؤول الإدارة والخدمات', 'الرديف', 'الرديف / مسؤول الإدارة والخدمات', 'معاون الإداري', 'مدير المستشفى', 'المعاون الإداري', 'المعاون الطبي'];
-
-const POSITION_CATS = [
-  { k: 'absent',      t: 'تغيب عن الدوام الرسمي',                hasJob: true, hasNote: true },
-  { k: 'noExit',      t: 'عدم وجود بصمة مغادرة',                hasJob: true, hasNote: true },
-  { k: 'noEntry',     t: 'عدم وجود بصمة دخول',                  hasJob: true, hasNote: true },
-  { k: 'noSurprise',  t: 'عدم تأدية البصمة المفاجئة',           hasJob: true, hasNote: true },
-  { k: 'noBoth',      t: 'عدم تأدية بصمتي الحضور والمغادرة',    hasJob: true, hasNote: true },
-];
+/** يبني فئات المواقف من القائمة القابلة للتعديل، مع الحفاظ على المفاتيح المعروفة */
+function positionCats() {
+  const labels = L.get('positionCategories');
+  const taken = new Set();
+  const out = [];
+  labels.forEach((label, idx) => {
+    let key = POSITION_CAT_KEYS[idx] && POSITION_CAT_KEYS[idx];
+    /* استخدم المفتاح المعروف فقط إن كان عنوانه هو نفسه (لم يُعدَّل ترتيبه) */
+    if (!key || taken.has(key)) key = slugKey(label, taken);
+    taken.add(key);
+    out.push({ k: key, t: label, hasJob: true, hasNote: true, hasList: true });
+  });
+  /* ضمان وجود الفئات المعروفة ولو حُذفت، حتى لا تفقد تقارير قديمة بياناتها */
+  POSITION_CAT_KEYS.forEach((k, i) => {
+    if (!out.some(c => c.k === k)) {
+      out.push({ k, t: (L.get('positionCategories')[i] || k), hasJob: true, hasNote: true, hasList: true });
+    }
+  });
+  return out;
+}
+/** المفتاح المستخدم لتخزين عناصر فئة معيّنة في تقرير محفوظ */
+function catKeysFor() { return positionCats().map(c => c.k); }
 
 /* ---------------------------------------------------------------- أدوات مساعدة */
 const $  = (s, r) => (r || document).querySelector(s);
@@ -263,11 +283,12 @@ function download(blob, filename) {
 }
 const safeName = s => tidy(s).replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_').slice(0, 70) || 'تقرير';
 
-/** أرقام بالصيغة الغربية — هي الأوضح في ملفات Word وأقل عرضة لمشاكل الخطوط */
+/** أرقام نظيفة لملف Word — الفراغ يظهر «—» بدل صفر مضلِّل */
 function fmtNum(n) {
-  const v = parseInt(n, 10);
-  if (isNaN(v)) return '0';
-  return String(v);
+  const s = String(n == null ? '' : n).trim();
+  if (!s) return '—';
+  const v = parseInt(normalizeDigits(s), 10);
+  return isNaN(v) ? s : String(v);
 }
 
 /** تحويل data URL إلى بايتات + نوع الصورة (لإدراج الشعار في ملف Word) */
@@ -301,6 +322,26 @@ const state = {
   settings: null,
   library: null,
   logo: '',
+  listKey: 'jobTitles',
+};
+
+/* ------------------------------------------------------------------ القوائم
+   كل قائمة اختيار مصدرها options.js وقابلة للتعديل من «مكتبة العبارات».
+   هذه الأغلفة تمنع تثبيت أي قائمة داخل الكود. */
+const L = {
+  get(key) {
+    if (typeof window !== 'undefined' && window.ADMHLists) return window.ADMHLists.get(key);
+    return [];
+  },
+  has(key) { return typeof window !== 'undefined' && !!window.ADMHLists && window.ADMHLists.has(key); },
+  /** خيارات <select> مع تحديد القيمة الحالية */
+  opt(key, selected) {
+    return L.get(key).map(v => `<option value="${esc(v)}"${v === selected ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  },
+  /** خيارات <datalist> (اقتراحات) */
+  data(key) {
+    return L.get(key).map(v => `<option value="${esc(v)}"></option>`).join('');
+  },
 };
 
 function blankReport() {
@@ -309,7 +350,9 @@ function blankReport() {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     title: '',
-    visitType: VISIT_TYPES[1],
+    visitType: (typeof window !== 'undefined' && window.ADMHLists)
+      ? (window.ADMHLists.get('visitTypes')[0] || 'زيارة تفتيشية')
+      : 'زيارة تفتيشية',
     facilityKind: 'مركز صحي',
     facilityName: '',
     sector: '',
@@ -345,8 +388,8 @@ function blankReport() {
 }
 function blankSettings() {
   return {
-    l1: 'جمهورية العراق – وزارة الصحة',
-    l2: 'دائرة التفتيش / قسم تفتيش المؤسسات الصحية الحكومية',
+    l1: 'دائرة صحة بغداد/ الرصافة',
+    l2: 'قسم التفتيش',
     l3: 'شعبة تفتيش المؤسسات الصحية الحكومية',
     font: 'Simplified Arabic',
     fontSize: '12',
@@ -417,7 +460,7 @@ function saveToArchive(silent) {
 
 /* ---------------------------------------------------------------- بناء النموذج */
 function renderAll() {
-  fillSelect($('#f_visitType'), VISIT_TYPES, state.report.visitType);
+  fillSelectFrom($('#f_visitType'), L.get('visitTypes'), state.report.visitType);
 
   /* المسؤولون — القائمة #dlRoles معرّفة خارج الجدول وتملؤها fillDatalists */
   renderRows('#tOfficials tbody', 'officials', state.report.officials, (d) => `
@@ -444,7 +487,7 @@ function renderAll() {
   renderRows('#tProcs tbody', 'procedures', state.report.procedures, (d, i) => `
     <td><input type="date" data-k="date" value="${esc(d.date || '')}"></td>
     <td><select data-k="kind">
-      ${['سحب موقف', 'بصمة مفاجئة', 'تدقيق مفاجئ', 'سجل تواقيع', 'توقيع مفاجئ'].map(k => `<option${d.kind === k ? ' selected' : ''}>${esc(k)}</option>`).join('')}
+      ${L.get('procedureKinds').map(k => `<option${d.kind === k ? ' selected' : ''}>${esc(k)}</option>`).join('')}
     </select></td>
     <td><input type="text" data-k="source" placeholder="مثال: موظفي المركز / الأطباء الاختصاص" value="${esc(d.source || '')}"></td>
     <td><input type="text" data-k="note" placeholder="اختياري" value="${esc(d.note || '')}"></td>`);
@@ -454,7 +497,7 @@ function renderAll() {
     <td class="num"></td>
     <td><textarea data-k="text" rows="2">${esc(d.text || '')}</textarea></td>
     <td><select data-k="status">
-      ${['منفذة', 'منفذة جزئياً', 'غير منفذة', 'قيد التنفيذ'].map(s => `<option${d.status === s ? ' selected' : ''}>${esc(s)}</option>`).join('')}
+      ${L.get('prevRecStatuses').map(s => `<option${d.status === s ? ' selected' : ''}>${esc(s)}</option>`).join('')}
     </select></td>
     <td><input type="text" data-k="note" value="${esc(d.note || '')}"></td>`, true);
 
@@ -493,10 +536,16 @@ function renderAll() {
   updateTitle();
   fillDatalists();
 }
-function fillSelect(sel, list, value) {
+/** يملأ قائمة منسدلة من قائمة قابلة للتعديل، ويُبقي قيمة التقرير حتى لو حُذفت من القائمة */
+function fillSelectFrom(sel, list, value) {
+  if (!sel) return;
   sel.innerHTML = list.map(v => `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(v)}</option>`).join('');
-  if (value && !list.includes(value)) { sel.insertAdjacentHTML('afterbegin', `<option value="${esc(value)}" selected>${esc(value)}</option>`); }
+  if (value && !list.includes(value)) {
+    sel.insertAdjacentHTML('afterbegin', `<option value="${esc(value)}" selected>${esc(value)}</option>`);
+  }
 }
+/** يملأ حقل اقتراحات (datalist) من قائمة قابلة للتعديل */
+function fillDatalist(sel, key) { const e = typeof sel === 'string' ? $(sel) : sel; if (e) e.innerHTML = L.data(key); }
 function setVal(sel, v) { const e = $(sel); if (e) e.value = (v == null ? '' : v); }
 
 /** صفوف جداول عامة: حقل data-k + زر حذف */
@@ -515,20 +564,13 @@ function renderRows(tbodySel, listKey, arr, cellFn, indexFirst) {
 function renderStaff() {
   const tb = $('#tStaff tbody');
   const keys = Object.keys(state.report.staff);
-  if (!keys.length) { tb.innerHTML = `<tr><td colspan="5" class="empty">لا توجد فئات</td></tr>`; return; }
+  if (!keys.length) { tb.innerHTML = `<tr><td colspan="3" class="empty">لا توجد فئات</td></tr>`; return; }
   tb.innerHTML = keys.map(k => {
     const v = state.report.staff[k];
-    const t = parseInt(normalizeDigits(v.total), 10) || 0;
-    const a = parseInt(normalizeDigits(v.actual), 10) || 0;
-    const short = t > 0 ? Math.max(0, t - a) : 0;
-    const pct = t > 0 ? Math.round(short / t * 100) : '';
-    const cls = pct === '' ? '' : pct >= 50 ? 'err' : pct >= 30 ? 'warn' : 'ok';
     return `<tr data-k="${esc(k)}">
       <td><input type="text" data-f="cat" value="${esc(k)}"></td>
       <td><input type="number" min="0" inputmode="numeric" data-f="total" value="${esc(v.total)}"></td>
       <td><input type="number" min="0" inputmode="numeric" data-f="actual" value="${esc(v.actual)}"></td>
-      <td>${t || a ? short : '—'}</td>
-      <td>${pct === '' ? '—' : `<span class="chip ${cls}">${pct}%</span>`}</td>
     </tr>`;
   }).join('');
 }
@@ -584,18 +626,18 @@ function renderPositions() {
         <div class="f"><label>اليوم</label><input type="text" data-p="day" value="${esc(p.day || dayNameOf(p.date))}"></div>
         <div class="f"><label>بداية العبارة</label>
           <select data-p="verb">
-            ${['بعد تدقيق', 'بعد الاطلاع على', 'بعد سحب'].map(v => `<option${p.verb === v ? ' selected' : ''}>${esc(v)}</option>`).join('')}
+            ${L.get('positionVerbs').map(v => `<option${p.verb === v ? ' selected' : ''}>${esc(v)}</option>`).join('')}
           </select>
         </div>
         <div class="f"><label>نوع الموقف</label>
           <select data-p="kind">
-            ${['موقف البصمة', 'موقف البصمة المفاجئة (التدقيق المفاجئ)', 'موقف الحضور', 'موقف الحضور المفاجئ (التدقيق المفاجئ)', 'سجل التواقيع', 'تقرير البصمة'].map(v => `<option${p.kind === v ? ' selected' : ''}>${esc(v)}</option>`).join('')}
+            ${L.get('positionKinds').map(v => `<option${p.kind === v ? ' selected' : ''}>${esc(v)}</option>`).join('')}
           </select>
         </div>
         <div class="f wide"><label>عبارة تمهيدية (اختياري)</label><input type="text" data-p="intro" placeholder="اتركه فارغاً لتوليد العبارة تلقائياً" value="${esc(p.intro || '')}"></div>
       </div>
 
-      ${POSITION_CATS.map(c => {
+      ${positionCats().map(c => {
         const rows = (p.items && p.items[c.k]) || [];
         return `<div style="margin-top:12px">
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
@@ -650,13 +692,25 @@ function renderRecGroups() {
     </div>`).join('');
 }
 function fillDatalists() {
+  /* قوائم الاقتراحات — كلها من المكتبة القابلة للتعديل */
+  fillDatalist('#dlJobs', 'jobTitles');
+  fillDatalist('#dlRoles', 'officialRoles');
+  fillDatalist('#dlDeviceState', 'deviceStates');
+
+  /* القوائم المنسدلة الثابتة — تُبنى من المكتبة أيضاً */
+  const fk = $('#f_facilityKind');
+  if (fk) fk.innerHTML = L.opt('facilityKinds', state.report ? state.report.facilityKind : fk.value);
+
+  const fr = $('#f_fpReportFreq');
+  if (fr) fr.innerHTML = `<option value="">— بدون —</option>` + L.opt('reportFreqs', state.report ? state.report.fp.reportFreq : fr.value);
+  const ft = $('#f_fpReportTo');
+  if (ft) ft.innerHTML = `<option value="">— بدون —</option>` + L.opt('reportTargets', state.report ? state.report.fp.reportTo : ft.value);
+
+  /* المؤسسات والقطاعات المستخلصة من التقارير السابقة */
   const facs = [...new Set(state.reports.map(r => r.facilityName).filter(Boolean))];
   const dlF = $('#dlFacilities'); if (dlF) dlF.innerHTML = facs.map(f => `<option value="${esc(f)}">`).join('');
   const secs = [...new Set(state.reports.map(r => r.sector).filter(Boolean))];
   const dlS = $('#dlSectors'); if (dlS) dlS.innerHTML = secs.map(s => `<option value="${esc(s)}">`).join('');
-  const jobs = [...new Set([...JOB_TITLES, ...state.reports.flatMap(r => (r.officials || []).map(o => o.job)).filter(Boolean)])];
-  const dlJ = $('#dlJobs'); if (dlJ) dlJ.innerHTML = jobs.map(j => `<option value="${esc(j)}">`).join('');
-  const dlR = $('#dlRoles'); if (dlR) dlR.innerHTML = OFFICIAL_ROLES.map(r => `<option value="${esc(r)}">`).join('');
 }
 function updateTitle() {
   const r = state.report;
@@ -674,7 +728,7 @@ function autoTitle(r) {
   const name = tidy(r.facilityName);
   const sec = tidy(r.sector);
   /* نستخدم حرف الجر المناسب لنوع المؤسسة: إلى مستشفى / إلى مركز صحي / إلى قطاع */
-  const prep = /^(مستشفى|مركز|قطاع|مصحة|مذخر|مؤسسة)/.test(kind) ? 'إلى' : 'إلى';
+  const prep = /^(مستشفى|مركز|قطاع)/.test(kind) ? 'إلى' : 'إلى';
   const head = `تقرير ${tidy(r.visitType) || 'زيارة تفتيشية'} ${prep} ${kind}`;
   if (!name) return head;
   return sec ? `${head} ${name} التابع إلى ${sec}` : `${head} ${name}`;
@@ -689,7 +743,7 @@ function rerender(part) {
   else if (part === 'procedures') renderRows('#tProcs tbody', 'procedures', state.report.procedures, (d) => `
     <td><input type="date" data-k="date" value="${esc(d.date || '')}"></td>
     <td><select data-k="kind">
-      ${['سحب موقف', 'بصمة مفاجئة', 'تدقيق مفاجئ', 'سجل تواقيع', 'توقيع مفاجئ'].map(k => `<option${d.kind === k ? ' selected' : ''}>${esc(k)}</option>`).join('')}
+      ${L.get('procedureKinds').map(k => `<option${d.kind === k ? ' selected' : ''}>${esc(k)}</option>`).join('')}
     </select></td>
     <td><input type="text" data-k="source" placeholder="مثال: موظفي المركز / الأطباء الاختصاص" value="${esc(d.source || '')}"></td>
     <td><input type="text" data-k="note" placeholder="اختياري" value="${esc(d.note || '')}"></td>`);
@@ -697,7 +751,7 @@ function rerender(part) {
     <td class="num"></td>
     <td><textarea data-k="text" rows="2">${esc(d.text || '')}</textarea></td>
     <td><select data-k="status">
-      ${['منفذة', 'منفذة جزئياً', 'غير منفذة', 'قيد التنفيذ'].map(s => `<option${d.status === s ? ' selected' : ''}>${esc(s)}</option>`).join('')}
+      ${L.get('prevRecStatuses').map(s => `<option${d.status === s ? ' selected' : ''}>${esc(s)}</option>`).join('')}
     </select></td>
     <td><input type="text" data-k="note" value="${esc(d.note || '')}"></td>`, true);
   else if (part === 'signers') renderRows('#tSigners tbody', 'signers', state.report.signers, d => `
@@ -757,13 +811,17 @@ function bindForm() {
     if (!t || !t.dataset) return;
     const rec = state.report;
 
-    /* جداول data-k مرتبطة بالفهرس */
-    const tr = t.closest && t.closest('tr[data-i]');
-    if (tr && t.dataset.k) {
-      const table = tr.closest('table');
+    /* الصفّ الحاوي. ملاحظة مهمة: لا نستخدم closest('tr[data-i]') لأن صفوف
+       الملاك تحمل data-k لا data-i، فيكون الناتج null ويُتجاهل الحقل.
+       (كان هذا خطأً حقيقياً: الكتابة في جدول الملاك لم تكن تُحفظ إطلاقاً.) */
+    const row = t.closest ? t.closest('tr') : null;
+
+    /* جداول مرتبطة بالفهرس (المسؤولون، الإجراءات، التوصيات السابقة، التوقيعات) */
+    if (row && row.dataset.i !== undefined && t.dataset.k) {
+      const table = row.closest('table');
       const host = table ? table.id : '';
       const key = { tOfficials: 'officials', tProcs: 'procedures', tPrevRecs: 'prevRecs', tSigners: 'signers' }[host];
-      const i = +tr.dataset.i;
+      const i = +row.dataset.i;
       if (key && Array.isArray(rec[key]) && rec[key][i]) {
         rec[key][i][t.dataset.k] = tidy(t.value);
         saveDraft();
@@ -772,8 +830,8 @@ function bindForm() {
     }
 
     /* السجلات: الاسم + التقييم اليدوي */
-    if (t.dataset.f && tr && tr.closest('table') && tr.closest('table').id === 'tRecords') {
-      const i = +tr.dataset.i;
+    if (row && t.dataset.f && row.closest('table') && row.closest('table').id === 'tRecords') {
+      const i = +row.dataset.i;
       if (rec.records[i]) {
         if (t.dataset.f === 'name') rec.records[i].name = tidy(t.value);
         else { rec.records[i].evalManual = t.value; recomputeRecordEval(i, true); }
@@ -782,13 +840,14 @@ function bindForm() {
       return;
     }
 
-    /* جداول الملاك (المفتاح اسم الفئة) */
-    if (tr && t.dataset.f && tr.dataset.k) {
-      const oldKey = tr.dataset.k, f = t.dataset.f;
-      if (!rec.staff[oldKey]) rec.staff[oldKey] = { total: '', actual: '' };
-      rec.staff[oldKey][f] = normalizeDigits(t.value);
-      updateStaffRowView(tr, oldKey);
-      saveDraft();
+    /* جداول الملاك (المفتاح اسم الفئة، لا فهرس) */
+    if (row && t.dataset.f && row.dataset.k !== undefined) {
+      const oldKey = row.dataset.k, f = t.dataset.f;
+      if (f !== 'cat') {
+        if (!rec.staff[oldKey]) rec.staff[oldKey] = { total: '', actual: '' };
+        rec.staff[oldKey][f] = normalizeDigits(t.value);
+        saveDraft();
+      }
       return;
     }
 
@@ -841,12 +900,12 @@ function bindForm() {
     const t = e.target;
     if (!t || !t.dataset) return;
     const rec = state.report;
-    const tr = t.closest && t.closest('tr[data-i]');
-    if (tr && t.tagName === 'SELECT' && t.dataset.k) {
-      const table = tr.closest('table');
+    const row = t.closest ? t.closest('tr') : null;
+    if (row && row.dataset.i !== undefined && t.tagName === 'SELECT' && t.dataset.k) {
+      const table = row.closest('table');
       const host = table ? table.id : '';
       const key = { tOfficials: 'officials', tProcs: 'procedures', tPrevRecs: 'prevRecs', tSigners: 'signers' }[host];
-      const i = +tr.dataset.i;
+      const i = +row.dataset.i;
       if (key && Array.isArray(rec[key]) && rec[key][i]) { rec[key][i][t.dataset.k] = t.value; saveDraft(); }
     }
   });
@@ -919,19 +978,6 @@ function bindForm() {
 
   /* الأزرار: مستمع واحد لكل النقرات */
   document.addEventListener('click', onClick);
-}
-
-/** تحديث خلايا النقص/النسبة لصف ملاك دون إعادة رسم الجدول */
-function updateStaffRowView(tr, key) {
-  const v = state.report.staff[key] || { total: '', actual: '' };
-  const t = parseInt(normalizeDigits(v.total), 10) || 0;
-  const a = parseInt(normalizeDigits(v.actual), 10) || 0;
-  const short = t > 0 ? Math.max(0, t - a) : 0;
-  const pct = t > 0 ? Math.round(short / t * 100) : '';
-  const tds = tr.querySelectorAll('td');
-  if (tds[3]) tds[3].textContent = (t || a) ? short : '—';
-  const cls = pct === '' ? '' : pct >= 50 ? 'err' : pct >= 30 ? 'warn' : 'ok';
-  if (tds[4]) tds[4].innerHTML = pct === '' ? '—' : `<span class="chip ${cls}">${pct}%</span>`;
 }
 
 /** دمج التقييمات المختارة + النص اليدوي في نص واحد */
@@ -1021,9 +1067,22 @@ function onClick(e) {
     state.report.recGroups.splice(+gda.dataset.gdelall, 1);
     rerender('recGroups'); saveDraft(); return;
   }
-  /* مكتبة لجهة معيّنة */
+  /* مكتبة لجهة معيّنة — إلحاق البنود المحددة، بلا استبدال */
   const gl = t.closest('[data-glib]');
-  if (gl) { openLibrary('reco', gi => { state.report.recGroups[+gl.dataset.glib].items.push(gi); rerender('recGroups'); saveDraft(); }); return; }
+  if (gl) {
+    const gi = +gl.dataset.glib;
+    openLibrary('reco', values => {
+      const add = (Array.isArray(values) ? values : [values]).map(tidy).filter(Boolean);
+      const g = state.report.recGroups[gi];
+      if (!g || !add.length) return;
+      /* أزل بنداً فارغاً وحيداً قبل الإلحاق */
+      if (g.items.length === 1 && !tidy(g.items[0])) g.items = [];
+      add.forEach(v => g.items.push(v));
+      rerender('recGroups'); saveDraft();
+      toast(`أُضيف ${add.length} بنداً`, 'ok');
+    }, { multi: true });
+    return;
+  }
 
   /* التنقل */
   const go = t.closest('[data-go]');
@@ -1077,7 +1136,7 @@ function bindButtons() {
   bindOn('#btnAllRecords', () => {
     const have = new Set(state.report.records.map(r => tidy(r.name)));
     let n = 0;
-    RECORD_ROWS.forEach(name => { if (!have.has(name)) { state.report.records.push({ name, eval: '', evalList: [], evalManual: '' }); n++; } });
+    L.get('recordNames').forEach(name => { if (!have.has(name)) { state.report.records.push({ name, eval: '', evalList: [], evalManual: '' }); n++; } });
     rerender('records'); saveDraft(); toast(n ? `أُضيف ${n} سجلاً` : 'كل السجلات موجودة', 'ok');
   });
 
@@ -1094,17 +1153,16 @@ function bindButtons() {
   bindOn('#bulkFillEmpty', () => bulkApply(false));
   bindOn('#bulkFillAll', () => bulkApply(true));
 
-  /* الجهات المعتادة */
+  /* الجهات المعتادة — من قائمة «جهات التوصيات» القابلة للتعديل */
   bindOn('#btnStdRecs', () => {
     const have = new Set(state.report.recGroups.map(g => g.label));
-    RECO_GROUPS.forEach(g => {
+    recoGroups().forEach(g => {
       if (!have.has(g.label)) state.report.recGroups.push({ letter: g.letter, label: g.label, intro: g.preset, items: [''] });
     });
     rerender('recGroups'); saveDraft(); toast('أُضيفت الجهات', 'ok');
   });
 
-  /* أزرار المكتبة داخل الأقسام */
-  $$('[data-lib]').forEach(b => { b.onclick = () => openLibrary(b.dataset.lib); });
+  /* أزرار المكتبة داخل الأقسام — يُربط كل واحد بما يناسبه أدناه */
 
   /* تصدير / معاينة / حفظ */
   bindOn('#btnWord', () => exportWord());
@@ -1136,8 +1194,77 @@ function bindButtons() {
   bindOn('#btnLogoDel', () => { state.settings.logo = ''; state.logo = ''; saveSettings(true); toast('أُزيل الشعار', 'ok'); });
   bindOn('#btnWipe', wipeAll);
 
-  /* المكتبة */
-  bindOn('#libKind', null);
+  /* ---------------- قوائم الاختيار (محرّر المكتبة) ---------------- */
+  const lp = $('#listPicker');
+  if (lp) lp.onchange = () => { state.listKey = lp.value; renderListEditor(); };
+
+  bindOn('#btnListAdd', () => {
+    if (!window.ADMHLists) return;
+    const name = window.ADMHLists.label(state.listKey);
+    const v = prompt(`قيمة جديدة في «${name}»:`);
+    if (!v || !v.trim()) return;
+    if (!window.ADMHLists.add(state.listKey, tidy(v))) { toast('القيمة موجودة مسبقاً', 'warn'); return; }
+    saveListsCache(); renderListEditor(); renderListPicker(); applyListChanges();
+    toast('أُضيفت القيمة', 'ok');
+  });
+
+  bindOn('#btnListReset', () => {
+    if (!window.ADMHLists) return;
+    if (!confirm(`إرجاع «${window.ADMHLists.label(state.listKey)}» إلى قيمها الأصلية؟`)) return;
+    window.ADMHLists.reset(state.listKey);
+    saveListsCache(); renderListEditor(); renderListPicker(); applyListChanges();
+    toast('أُرجعت القائمة للأصل', 'ok');
+  });
+
+  bindOn('#btnListsSaveDefault', () => {
+    if (!window.ADMHLists) return;
+    if (!confirm('سيُنزَّل ملف options.js بقيمك الحالية.\n\nضعه مكان الملف القديم في المشروع ثم ارفعه إلى GitHub،\nفتصبح هذه القيم هي الأصل على كل الأجهزة.\n\nمتابعة؟')) return;
+    downloadOptionsFile();
+  });
+
+  bindOn('#btnListsExport', () => {
+    if (!window.ADMHLists) return;
+    const payload = {
+      app: 'ADMH-InspectionReports', kind: 'option-lists', version: APP_VERSION,
+      exportedAt: new Date().toISOString(), lists: window.ADMHLists.exportAll(),
+    };
+    download(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
+      `قوائم_الاختيار_${todayISO()}.json`);
+    toast('تم تصدير القوائم', 'ok');
+  });
+
+  bindOn('#btnListsImport', () => { const f = $('#fileLists'); if (f) f.click(); });
+  const fls = $('#fileLists');
+  if (fls) fls.onchange = e => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!f || !window.ADMHLists) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try {
+        const data = JSON.parse(rd.result);
+        const lists = data && data.lists ? data.lists : data;
+        const n = window.ADMHLists.importAll(lists);
+        if (!n) throw new Error('لا قوائم صالحة في الملف');
+        saveListsCache(); renderListPicker(); renderListEditor(); applyListChanges();
+        toast(`استُوردت ${n} قائمة`, 'ok');
+      } catch (err) { toast('فشل الاستيراد: ' + err.message, 'err', 4500); }
+    };
+    rd.readAsText(f);
+  };
+
+  bindOn('#btnListsResetAll', () => {
+    if (!window.ADMHLists) return;
+    if (!confirm('إرجاع كل القوائم إلى قيمها الأصلية؟ سيُفقد كل تعديل أجريته.')) return;
+    window.ADMHLists.resetAll();
+    saveListsCache(); renderListPicker(); renderListEditor(); applyListChanges();
+    toast('أُرجعت كل القوائم للأصل', 'ok');
+  });
+
+  /* إعادة بناء الواجهة عند تغيّر أي قائمة */
+  if (window.ADMHLists) window.ADMHLists.onChange(() => { renderListPicker(); applyListChanges(); });
+
+  /* المكتبة: العبارات */
   const lk = $('#libKind');
   if (lk) lk.onchange = () => { renderLibraryView(); };
   bindOn('#btnLibAdd', () => {
@@ -1151,7 +1278,9 @@ function bindButtons() {
   });
 
   /* المزامنة السحابية — الإعدادات مضمّنة في sync.js، تبقى بيانات الدخول فقط */
-  bindOn('#btnSyncConnect', () => syncNow(true));
+  bindOn('#btnSyncConnect', () => syncNow(true, 'email'));
+  bindOn('#btnSyncGoogle', () => syncNow(true, 'google'));
+  bindOn('#btnSyncForgot', () => syncForgotPassword());
   bindOn('#btnSyncNow', () => syncNow(true));
   bindOn('#btnSyncSignOut', () => {
     const S = sync.get();
@@ -1183,6 +1312,42 @@ function bindButtons() {
   /* مكتبة تصفية */
   bind('#libFilter', 'input', renderLibraryModal);
 
+  /* مكتبة العبارات: تحديد متعدد وإضافة (يُلحق ولا يستبدل) */
+  bind('#libModalList', 'click', e => {
+    const item = e.target.closest('[data-libkey]');
+    if (!item) return;
+    const key = item.dataset.libkey, value = item.dataset.libpick;
+    const at = libMulti.findIndex(x => x.key === key);
+    if (!libAllowMulti) {
+      /* نمط الاختيار الواحد: أضف مباشرة */
+      if (libCallback) libCallback([value]);
+      closeModal($('#libModal'));
+      toast('أُضيفت العبارة', 'ok');
+      return;
+    }
+    if (at >= 0) libMulti.splice(at, 1);
+    else libMulti.push({ key, value });
+    syncLibSelection();
+  });
+  bindOn('#libAddSelected', () => commitLibSelection());
+  bindOn('#libClearSel', () => { libMulti = []; syncLibSelection(); });
+
+  /* الملاحظات العامة: زر «📚 من المكتبة» كان لا يمرّر دالة استقبال */
+  $$('[data-lib]').forEach(b => {
+    b.onclick = () => {
+      const kind = b.dataset.lib;
+      openLibrary(kind, values => {
+        const add = (Array.isArray(values) ? values : [values]).map(tidy).filter(Boolean);
+        if (!add.length) return;
+        /* نُلحق في نهاية القائمة ولا نستبدل ما هو موجود */
+        add.forEach(v => state.report.general.push(v));
+        rerender('general');
+        saveDraft();
+        toast(`أُضيفت ${add.length} ملاحظة`, 'ok');
+      }, { multi: true });
+    };
+  });
+
   /* البحث في الأرشيف */
   ['#archSearch', '#archType', '#archSort'].forEach(s => {
     const e = $(s);
@@ -1209,7 +1374,9 @@ function verifyBindings() {
   const must = ['palBtn', 'themeBtn', 'helpBtn', 'btnWord', 'btnPreviewGo', 'btnNew', 'btnSaveLocal',
     'btnWord2', 'btnPrint', 'hamb', 'btnStdOfficials', 'btnAllRecords', 'btnBulkRecords',
     'btnStdRecs', 'btnExportAll', 'btnImport', 'btnWipe', 'btnSettingsSave', 'btnLibAdd',
-    'btnSyncNow', 'btnSyncSignOut', 'btnSyncConnect', 'dot',
+    'btnSyncNow', 'btnSyncSignOut', 'btnSyncConnect', 'btnSyncGoogle', 'btnSyncForgot', 'dot',
+    'btnListsSaveDefault', 'btnListsExport', 'btnListsImport', 'btnListsResetAll',
+    'btnListAdd', 'btnListReset', 'listPicker',
     'bulkFillEmpty', 'bulkFillAll'];
   const missing = must.filter(id => {
     const el = document.getElementById(id);
@@ -1222,7 +1389,14 @@ function bulkApply(overwrite) {
   const v = tidy($('#bulkText').value);
   if (!v) { toast('اكتب نص التقييم أولاً', 'warn'); return; }
   let n = 0;
-  state.report.records.forEach(r => { if (overwrite || !tidy(r.eval)) { r.eval = v; n++; } });
+  state.report.records.forEach((r, i) => {
+    if (overwrite || recordIsEmpty(r)) {
+      r.evalList = [v];
+      r.evalManual = '';
+      recomputeRecordEval(i);
+      n++;
+    }
+  });
   rerender('records'); saveDraft(); closeModal($('#bulkModal'));
   toast(`طُبّق على ${n} سجلاً`, 'ok');
 }
@@ -1293,7 +1467,281 @@ function saveSettings(silent) {
 }
 
 /* ---------------------------------------------------------------- المكتبة */
+/* ---------------------------------------------------------------------------
+   توليد ملف options.js جديد بالقيم الحالية.
+
+   لماذا تنزيل ملف بدل الكتابة المباشرة؟ لأن المتصفح لا يستطيع الكتابة على
+   القرص (عبر file://) ولا على خادم الاستضافة (عبر https). فلا سبيل برمجياً
+   إلى تعديل الملف في مكانه. لذا نولّد نسخة كاملة بالقيم الجديدة، يرفعها
+   المستخدم مرة واحدة، فتصبح هي الأصل لكل الأجهزة.
+   --------------------------------------------------------------------------- */
+function jsString(s) {
+  return "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, ' ') + "'";
+}
+function jsArray(arr) {
+  if (!arr.length) return '[]';
+  const oneLine = '[' + arr.map(jsString).join(', ') + ']';
+  if (oneLine.length <= 96) return oneLine;
+  return '[\n' + arr.map(v => '        ' + jsString(v) + ',').join('\n') + '\n      ]';
+}
+
+/** يبني محتوى options.js كاملاً بالقيم الحالية كأصل جديد */
+function buildOptionsFile() {
+  const api = window.ADMHLists;
+  if (!api) return '';
+  const all = api.all();
+
+  let out = '';
+  out += '/* =============================================================================\n';
+  out += '   الطبقة القابلة للتعديل: كل قائمة اختيار في الموقع مصدرها هنا.\n';
+  out += '   تُحرَّر من «مكتبة العبارات» داخل التطبيق.\n';
+  out += '\n';
+  out += '   هذا الملف مُولَّد من داخل التطبيق بزر «حفظ القيم كأصل». القيم أدناه\n';
+  out += '   صارت الأصل لكل الأجهزة، ويمكن للمستخدم تعديلها من الواجهة كالعادة.\n';
+  out += '   تاريخ التوليد: ' + new Date().toISOString() + '\n';
+  out += '   ============================================================================= */\n';
+  out += "'use strict';\n\n";
+  out += '(function (global) {\n';
+  out += "  const LS = 'admh.lists.v1';\n\n";
+  out += '  /* تعريف القوائم: label للعرض، hint شرح، values القيم الابتدائية */\n';
+  out += '  const DEFAULTS = {\n';
+
+  api.ORDER.forEach((key, ki) => {
+    const item = all[key];
+    if (!item) return;
+    out += '    ' + key + ': {\n';
+    out += '      label: ' + jsString(item.label) + ',\n';
+    out += '      hint: ' + jsString(item.hint) + ',\n';
+    out += '      values: ' + jsArray(item.values) + ',\n';
+    out += '    },\n';
+  });
+
+  out += '  };\n\n';
+  out += '  /* ترتيب العرض في المكتبة */\n';
+  out += '  const ORDER = [\n';
+  api.ORDER.filter(k => all[k]).forEach(k => { out += '    ' + jsString(k) + ',\n'; });
+  out += '  ];\n\n';
+
+  out += `  const listeners = [];
+  let lists = null;
+
+  function read() {
+    let saved = null;
+    try { const r = localStorage.getItem(LS); saved = r ? JSON.parse(r) : null; } catch (e) {}
+    const out = {};
+    Object.keys(DEFAULTS).forEach(k => {
+      const def = DEFAULTS[k];
+      const v = saved && Array.isArray(saved[k]) ? saved[k] : def.values;
+      out[k] = { label: def.label, hint: def.hint, values: v.slice() };
+    });
+    return out;
+  }
+
+  function notify() {
+    try {
+      if (typeof global.CustomEvent === 'function' && typeof global.dispatchEvent === 'function') {
+        global.dispatchEvent(new global.CustomEvent('admh:lists-changed'));
+      }
+    } catch (e) { /* بيئات بلا DOM */ }
+  }
+
+  function write() {
+    const flat = {};
+    Object.keys(lists).forEach(k => { flat[k] = lists[k].values; });
+    try { localStorage.setItem(LS, JSON.stringify(flat)); } catch (e) {}
+    listeners.forEach(fn => { try { fn(); } catch (e) {} });
+    notify();
+  }
+
+  const API = {
+    ORDER,
+    all() { if (!lists) lists = read(); return lists; },
+    get(key) { const l = API.all()[key]; return l ? l.values.slice() : []; },
+    label(key) { const l = API.all()[key]; return l ? l.label : key; },
+    hint(key) { const l = API.all()[key]; return l ? l.hint : ''; },
+    has(key) { return !!API.all()[key]; },
+
+    setValues(key, arr) {
+      const l = API.all()[key];
+      if (!l) return false;
+      l.values = (arr || []).map(s => String(s).trim()).filter(Boolean);
+      write(); return true;
+    },
+    add(key, value) {
+      const l = API.all()[key];
+      const v = String(value == null ? '' : value).trim();
+      if (!l || !v) return false;
+      if (l.values.includes(v)) return false;
+      l.values.push(v); write(); return true;
+    },
+    remove(key, value) {
+      const l = API.all()[key];
+      if (!l) return false;
+      const i = l.values.indexOf(value);
+      if (i < 0) return false;
+      l.values.splice(i, 1); write(); return true;
+    },
+    move(key, index, delta) {
+      const l = API.all()[key];
+      if (!l) return false;
+      const j = index + delta;
+      if (index < 0 || index >= l.values.length || j < 0 || j >= l.values.length) return false;
+      const [x] = l.values.splice(index, 1);
+      l.values.splice(j, 0, x);
+      write(); return true;
+    },
+    reset(key) {
+      const def = DEFAULTS[key];
+      if (!def) return false;
+      API.all()[key].values = def.values.slice();
+      write(); return true;
+    },
+    resetAll() {
+      try { localStorage.removeItem(LS); } catch (e) {}
+      lists = read();
+      listeners.forEach(fn => { try { fn(); } catch (e) {} });
+      notify();
+    },
+    exportAll() {
+      const flat = {};
+      Object.keys(API.all()).forEach(k => { flat[k] = API.all()[k].values; });
+      return flat;
+    },
+    importAll(obj) {
+      if (!obj || typeof obj !== 'object') return 0;
+      let n = 0;
+      Object.keys(DEFAULTS).forEach(k => {
+        if (Array.isArray(obj[k]) && obj[k].length) { API.all()[k].values = obj[k].map(String); n++; }
+      });
+      if (n) write();
+      return n;
+    },
+    onChange(fn) { listeners.push(fn); return () => { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); }; },
+  };
+
+  global.ADMHLists = API;
+})(typeof window !== 'undefined' ? window : globalThis);
+`;
+  return out;
+}
+
+/** ينزّل ملف options.js بالقيم الحالية ليرفعه المستخدم */
+function downloadOptionsFile() {
+  const api = window.ADMHLists;
+  if (!api) { toast('وحدة القوائم غير محمّلة', 'err'); return; }
+  const content = buildOptionsFile();
+  if (!content) { toast('تعذّر توليد الملف', 'err'); return; }
+  download(new Blob([content], { type: 'text/javascript;charset=utf-8' }), 'options.js');
+  const total = api.ORDER.reduce((a, k) => a + api.get(k).length, 0);
+  toast(`نُزِّل options.js بـ ${total} قيمة. ضعه مكان الملف القديم ثم ارفعه إلى GitHub.`, 'ok', 12000);
+}
+
+/* =============================================================================
+   محرّر قوائم الاختيار (في «مكتبة العبارات»)
+   ============================================================================= */
+function renderListPicker() {
+  const sel = $('#listPicker');
+  if (!sel || !window.ADMHLists) return;
+  const keep = state.listKey;
+  sel.innerHTML = window.ADMHLists.ORDER
+    .filter(k => window.ADMHLists.has(k))
+    .map(k => `<option value="${esc(k)}"${k === keep ? ' selected' : ''}>${esc(window.ADMHLists.label(k))}</option>`)
+    .join('');
+  if (!window.ADMHLists.has(keep)) state.listKey = window.ADMHLists.ORDER[0];
+  const cnt = $('#listsCount');
+  if (cnt) {
+    const total = window.ADMHLists.ORDER.reduce((a, k) => a + window.ADMHLists.get(k).length, 0);
+    cnt.textContent = `${window.ADMHLists.ORDER.length} قوائم · ${total} قيمة`;
+  }
+}
+
+function renderListEditor() {
+  const box = $('#listEditor');
+  if (!box || !window.ADMHLists) return;
+  const key = state.listKey;
+  const values = window.ADMHLists.get(key);
+  const hint = $('#listHint');
+  if (hint) hint.textContent = window.ADMHLists.hint(key) || '';
+
+  if (!values.length) {
+    box.innerHTML = `<p class="empty">القائمة فارغة — أضف قيمة.</p>`;
+    return;
+  }
+  box.innerHTML = `<div class="tw"><table style="min-width:520px"><tbody>` +
+    values.map((v, i) => `
+      <tr>
+        <td class="num" style="width:52px">${i + 1}</td>
+        <td><input type="text" data-listval="${i}" value="${esc(v)}"></td>
+        <td class="no-print" style="width:190px;white-space:nowrap">
+          <button class="btn ghost sm" data-listmove="${i}|-1" title="تحريك لأعلى" ${i === 0 ? 'disabled' : ''}>أعلى</button>
+          <button class="btn ghost sm" data-listmove="${i}|1" title="تحريك لأسفل" ${i === values.length - 1 ? 'disabled' : ''}>أسفل</button>
+          <button class="btn danger sm" data-listdel="${i}" title="حذف">حذف</button>
+        </td>
+      </tr>`).join('') +
+    `</tbody></table></div>`;
+
+  /* الكتابة تُحدّث القائمة فوراً */
+  box.oninput = e => {
+    const i = +e.target.dataset.listval;
+    if (isNaN(i) || !e.target.dataset.listval) return;
+    window.ADMHLists.all()[key].values[i] = e.target.value;
+    saveListsCache();
+    applyListChanges();
+  };
+  box.onchange = e => {
+    const i = +e.target.dataset.listval;
+    if (isNaN(i) || !e.target.dataset.listval) return;
+    const trimmed = tidy(e.target.value);
+    /* القيمة الفارغة تُحذف تلقائياً */
+    if (!trimmed) { window.ADMHLists.remove(key, window.ADMHLists.get(key)[i]); renderListEditor(); }
+    else { window.ADMHLists.all()[key].values[i] = trimmed; e.target.value = trimmed; }
+    saveListsCache();
+    applyListChanges();
+  };
+  box.onclick = e => {
+    const del = e.target.closest('[data-listdel]');
+    if (del) {
+      const i = +del.dataset.listdel;
+      const v = window.ADMHLists.get(key)[i];
+      if (v !== undefined && confirm(`حذف «${v}» من القائمة؟`)) {
+        window.ADMHLists.remove(key, v);
+        renderListEditor(); renderListPicker(); applyListChanges();
+      }
+      return;
+    }
+    const mv = e.target.closest('[data-listmove]');
+    if (mv) {
+      const [i, d] = mv.dataset.listmove.split('|').map(Number);
+      if (window.ADMHLists.move(key, i, d)) { renderListEditor(); applyListChanges(); }
+    }
+  };
+}
+
+/** حفظ القوائم في نفس مفتاح التخزين الذي تستخدمه options.js */
+function saveListsCache() {
+  if (window.ADMHLists) jwrite('admh.lists.v1', window.ADMHLists.exportAll());
+}
+
+/** إعادة بناء كل ما يعتمد على القوائم بعد تعديلها */
+function applyListChanges() {
+  try {
+    if (state.report) {
+      renderAll();
+      /* لا نُعيد رسم الجداول أثناء الكتابة، فقط القوائم المنسدلة والاقتراحات */
+      fillDatalists();
+      const vt = $('#f_visitType');
+      if (vt) fillSelectFrom(vt, L.get('visitTypes'), state.report.visitType);
+      applyScope();
+    }
+  } catch (e) { console.warn('applyListChanges', e); }
+}
+
 function renderLibraryView() {
+  /* ١. محرّر القوائم */
+  renderListPicker();
+  renderListEditor();
+
+  /* ٢. مكتبة العبارات */
   const kind = $('#libKind').value || 'records';
   if (!Array.isArray(state.library[kind])) state.library[kind] = [];
   const list = state.library[kind];
@@ -1311,10 +1759,26 @@ function renderLibraryView() {
     renderLibraryView();
   };
 }
+
+/* مكتبة العبارات: تحديد متعدد ثم إضافة دفعةً واحدة.
+   التحديد متعدد لأن المستخدم قد يريد أكثر من عبارة، والإضافة تُلحق
+   ولا تستبدل ما سبق. */
 let libCallback = null;
-function openLibrary(kind, cb) {
-  libCallback = cb || null;
-  $('#libModalTitle').textContent = kind === 'reco' ? 'مكتبة التوصيات' : kind === 'general' ? 'الملاحظات العامة' : 'تقييمات السجلات';
+let libMulti = [];
+let libAllowMulti = true;
+
+function openLibrary(kind, cb, opts) {
+  opts = opts || {};
+  libCallback = typeof cb === 'function' ? cb : null;
+  libAllowMulti = opts.multi !== false;
+  libMulti = [];
+
+  $('#libModalTitle').textContent =
+    kind === 'reco' ? 'مكتبة التوصيات' : kind === 'general' ? 'الملاحظات العامة' : 'تقييمات السجلات';
+  $('#libModalHint').textContent = libAllowMulti
+    ? 'اضغط عبارة أو أكثر لتحديدها، ثم «إضافة المحدد». تُضاف العبارات إلى ما هو موجود ولا تستبدله.'
+    : 'اضغط العبارة لإضافتها.';
+
   const groups = kind === 'reco' ? ['records', 'fp', 'common'] : [null];
   let html = '';
   groups.forEach(g => {
@@ -1322,41 +1786,85 @@ function openLibrary(kind, cb) {
       ? RECO_PRESETS.filter(r => r.g === g)
       : (state.library[kind] || []).map(v => ({ t: v, v }));
     if (!items.length) return;
-    if (g) html += `<div class="navsec" style="padding:10px 2px 5px;color:var(--muted);font-size:.8em;font-weight:700">${g === 'records' ? 'توصيات السجلات والإدامة' : g === 'fp' ? 'توصيات البصمة والدوام' : 'توصيات عامة'}</div>`;
-    html += items.map(it => `<div class="chip" style="display:block;margin-bottom:6px;border-radius:8px;padding:9px 11px;cursor:pointer" data-libpick="${esc(it.v)}"><b>${esc(it.t || '').slice(0, 90)}</b>${it.t && it.t !== it.v ? `<div style="font-weight:400;color:var(--muted);font-size:.9em;margin-top:3px">${esc(it.v).slice(0, 150)}${it.v.length > 150 ? '…' : ''}</div>` : ''}</div>`).join('');
+    if (g) html += `<div style="padding:10px 2px 5px;color:var(--muted);font-size:.8em;font-weight:700">${g === 'records' ? 'توصيات السجلات والإدامة' : g === 'fp' ? 'توصيات البصمة والدوام' : 'توصيات عامة'}</div>`;
+    html += items.map((it, i) => {
+      const key = kind + '|' + g + '|' + i;
+      return `<div class="chip" style="display:block;margin-bottom:6px;border-radius:8px;padding:9px 11px;cursor:pointer" data-libkey="${esc(key)}" data-libpick="${esc(it.v)}"><b>${esc(it.t || '').slice(0, 90)}</b>${it.t && it.t !== it.v ? `<div style="font-weight:400;color:var(--muted);font-size:.9em;margin-top:3px">${esc(it.v).slice(0, 150)}${it.v.length > 150 ? '…' : ''}</div>` : ''}</div>`;
+    }).join('');
   });
   $('#libModalList').innerHTML = html || '<p class="empty">لا عبارات.</p>';
   $('#libFilter').value = '';
-  $('#libModalList').onclick = e => {
-    const c = e.target.closest('[data-libpick]'); if (!c) return;
-    const v = c.dataset.libpick;
-    if (libCallback) libCallback(v);
-    else toast('لم يتم تحديد هدف', 'warn');
-    closeModal($('#libModal'));
-  };
+  syncLibSelection();
   openModal('#libModal');
 }
+
+function syncLibSelection() {
+  $$('#libModalList [data-libkey]').forEach(el => {
+    const on = libMulti.some(x => x.key === el.dataset.libkey);
+    el.classList.toggle('ok', on);
+    el.style.borderColor = on ? 'var(--ok)' : '';
+    el.style.background = on ? 'rgba(46,125,50,.16)' : '';
+  });
+  const bar = $('#libModalBar');
+  const btn = $('#libAddSelected');
+  if (btn) btn.textContent = libMulti.length ? `إضافة المحدد (${libMulti.length})` : 'إضافة المحدد';
+  if (bar) bar.style.display = libAllowMulti ? '' : 'none';
+}
+
+/** إضافة ما حُدِّد إلى الهدف (يُلحق ولا يستبدل) */
+function commitLibSelection() {
+  if (!libCallback) { toast('لم يتم تحديد هدف الإضافة', 'warn'); return; }
+  if (!libMulti.length) { toast('حدّد عبارة واحدة على الأقل', 'warn'); return; }
+  libCallback(libMulti.map(x => x.value));
+  const n = libMulti.length;
+  libMulti = [];
+  closeModal($('#libModal'));
+  toast(`أُضيفت ${n} عبارة`, 'ok');
+}
+
 function renderLibraryModal() {
   const q = tidy($('#libFilter').value).toLowerCase();
-  $$('#libModalList [data-libpick]').forEach(el => {
+  $$('#libModalList [data-libkey]').forEach(el => {
     el.style.display = !q || el.textContent.toLowerCase().includes(q) ? '' : 'none';
   });
 }
-/** تعبئة تقييمات السجلات من المكتبة */
-function openRecordFiller() {
-  const unfilled = state.report.records.filter(r => !tidy(r.eval));
+
+/** هل السجل بلا تقييم فعلي؟ (المصدر هو التقييمات المختارة + النص اليدوي) */
+function recordIsEmpty(r) {
+  return !(Array.isArray(r.evalList) && r.evalList.some(x => tidy(x)))
+      && !tidy(r.evalManual)
+      && !tidy(r.eval);
+}
+
+/** تعبئة تقييمات السجلات الفارغة من المكتبة (تحديد متعدد) */
+function openRecordFiller(targetIndex) {
   if (!state.report.records.length) { toast('أضف السجلات أولاً', 'warn'); return; }
-  if (!unfilled.length) { toast('كل السجلات لها تقييم — استخدم التقييم الجماعي للاستبدال', 'warn', 3200); }
-  openLibrary('records', v => {
-    if (!tidy(v)) return;
-    const target = unfilled.length ? unfilled : null;
-    if (target) {
-      // املأ الفراغات فقط بأول عبارة مختارة
-      target.forEach(r => { r.eval = v; });
-      toast(`عُبّئ ${target.length} سجلاً فارغاً`, 'ok');
+  const single = typeof targetIndex === 'number';
+  const unfilled = state.report.records.filter(recordIsEmpty);
+  if (!single && !unfilled.length) {
+    toast('كل السجلات لها تقييم — استخدم «تقييم جماعي» للاستبدال', 'warn', 3600);
+    return;
+  }
+  openLibrary('records', values => {
+    const add = (Array.isArray(values) ? values : [values]).map(tidy).filter(Boolean);
+    if (!add.length) return;
+    if (single) {
+      const r = state.report.records[targetIndex];
+      if (!r) return;
+      if (!Array.isArray(r.evalList)) r.evalList = [];
+      add.forEach(v => { if (!r.evalList.includes(v)) r.evalList.push(v); });
+      recomputeRecordEval(targetIndex);
+      toast(`أُضيف ${add.length} تقييماً للسجل`, 'ok');
+    } else {
+      unfilled.forEach(r => {
+        if (!Array.isArray(r.evalList)) r.evalList = [];
+        add.forEach(v => { if (!r.evalList.includes(v)) r.evalList.push(v); });
+      });
+      state.report.records.forEach((r, i) => { if (unfilled.includes(r)) recomputeRecordEval(i); });
+      toast(`عُبّئ ${unfilled.length} سجلاً فارغاً`, 'ok');
     }
     rerender('records'); saveDraft();
-  });
+  }, { multi: true });
 }
 
 /* ---------------------------------------------------------------- التنقل */
@@ -1448,7 +1956,7 @@ function refreshArchiveMeta() {
 }
 function fillArchType() {
   const s = $('#archType');
-  s.innerHTML = `<option value="">كل الأنواع</option>` + VISIT_TYPES.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  s.innerHTML = `<option value="">كل الأنواع</option>` + L.opt('visitTypes');
   const lt = $('#libKind'); if (lt) { /* noop */ }
 }
 
@@ -1544,6 +2052,7 @@ function initSync() {
       reports: state.reports.slice(),
       settings: Object.assign({}, state.settings, { updatedAt: state.settingsUpdatedAt || null }),
       library: state.library,
+      lists: (typeof window !== 'undefined' && window.ADMHLists) ? window.ADMHLists.exportAll() : null,
     }),
     save: payload => {
       if (Array.isArray(payload.reports)) {
@@ -1563,6 +2072,14 @@ function initSync() {
       if (payload.library && typeof payload.library === 'object') {
         ['records', 'reco', 'general'].forEach(k => { if (Array.isArray(payload.library[k])) state.library[k] = payload.library[k]; });
         jwrite(LS_LIBRARY, state.library);
+      }
+      if (payload.lists && typeof payload.lists === 'object' && window.ADMHLists) {
+        if (window.ADMHLists.importAll(payload.lists)) {
+          saveListsCache();
+          renderListPicker();
+          renderListEditor();
+          applyListChanges();
+        }
       }
       const st = S.status();
       if (st && st.lastSync) state.lastSyncSync = st.lastSync;
@@ -1627,7 +2144,7 @@ function renderSyncUI(st) {
 }
 function setText(sel, v) { const e = $(sel); if (e) e.textContent = v; }
 
-function syncNow(userInitiated) {
+function syncNow(userInitiated, mode) {
   if (!sync.available()) { toast('وحدة المزامنة غير محمّلة', 'err'); return Promise.resolve(); }
   const S = sync.get();
 
@@ -1639,7 +2156,11 @@ function syncNow(userInitiated) {
     if (!S.isConnected()) {
       const email = ($('#syncEmail') && $('#syncEmail').value.trim()) || '';
       const pass = ($('#syncPassword') && $('#syncPassword').value) || '';
-      return S.connect(email, pass).then(() => {
+      if (mode !== 'google') {
+        if (!email) { toast('أدخل البريد الإلكتروني', 'warn'); return; }
+        if (pass.length < 6) { toast('كلمة المرور 6 أحرف على الأقل', 'warn'); return; }
+      }
+      return S.connect(email, pass, mode).then(() => {
         renderSyncUI(S.status());
         toast('تم الاتصال — جاري المزامنة', 'ok');
         return S.syncNow();
@@ -1653,9 +2174,21 @@ function syncNow(userInitiated) {
       if (userInitiated) toast(`تمت المزامنة: ${r.total} تقرير (أُضيف ${r.added}، حُدّث ${r.updated}، حُذف ${r.removed})`, 'ok', 3800);
     });
   }).catch(err => {
-    toast(err.message, 'err', 4500);
+    /* مهلة أطول: رسائل الدخول تحتوي خطوات الحل وتحتاج قراءة */
+    toast(err.message, 'err', 10000);
     renderSyncUI(S.status());
   });
+}
+
+/** إرسال رابط إعادة تعيين كلمة المرور */
+function syncForgotPassword() {
+  const S = sync.available() ? sync.get() : null;
+  if (!S || !S.requestReset) { toast('وحدة المزامنة غير محمّلة', 'err'); return; }
+  const email = ($('#syncEmail') && $('#syncEmail').value.trim()) || '';
+  if (!email) { toast('اكتب بريدك في الحقل أولاً', 'warn'); return; }
+  S.requestReset(email)
+    .then(() => toast('أُرسل رابط إعادة التعيين إلى بريدك. تفقّد الوارد والبريد المزعج.', 'ok', 9000))
+    .catch(err => toast(err.message, 'err', 9000));
 }
 
 /* =============================================================================
@@ -1697,17 +2230,13 @@ function buildModel() {
   const offs = (r.officials || []).map(o => [t(o.role), titleName(o.job, o.name)]).filter(o => o[1]);
   if (offs.length) M.sections.push({ type: 'kv', heading: 'بيانات المؤسسة', rows: offs });
 
-  /* الملاك — فقرات لا جدول */
+  /* الملاك — فقرات لا جدول، بلا حساب نقص أو نسبة (بطلب صريح) */
   const staffRows = Object.keys(r.staff || {}).map(k => {
     const v = r.staff[k];
-    const tot = parseInt(normalizeDigits(v.total), 10) || 0;
-    const act = parseInt(normalizeDigits(v.actual), 10) || 0;
+    const tot = normalizeDigits(v.total).trim();
+    const act = normalizeDigits(v.actual).trim();
     if (!tot && !act) return null;
-    const short = tot > 0 ? Math.max(0, tot - act) : 0;
-    const pct = tot > 0 ? Math.round(short / tot * 100) : 0;
-    let line = `${t(k)}: الكلي ${fmtNum(tot)} — الفعلي ${fmtNum(act)}`;
-    if (tot > 0) line += ` — النقص ${fmtNum(short)} بنسبة ${pct}%`;
-    return line;
+    return `${t(k)}: الملاك الكلي ${fmtNum(tot)} — الملاك الفعلي ${fmtNum(act)}`;
   }).filter(Boolean);
   if (staffRows.length) M.sections.push({ type: 'list', heading: 'الملاك الكلي والفعلي', items: staffRows, numbered: false });
 
@@ -1764,7 +2293,7 @@ function buildModel() {
       intro = `${verb} ${t(p.kind) || 'موقف البصمة'} ${when}، تبين ما يلي:`;
     }
     const cats = [];
-    POSITION_CATS.forEach(c => {
+    positionCats().forEach(c => {
       const items = (p.items && p.items[c.k]) || [];
       const list = items.map(it => titleName(it.job, it.name)).filter(Boolean)
         .map((nm, i) => `${i + 1}. ${nm}${t(items[i].note) ? ' (' + t(items[i].note) + ')' : ''}`);
@@ -2092,7 +2621,19 @@ else init();
    يُستخدم للاختبار الآلي، ويوفّر واجهة برمجية بسيطة للتشغيل من الخارج. */
 const API = {
   APP_VERSION,
-  constants: { RECORD_PRESETS, RECORD_ADDONS, RECORD_ROWS, RECO_PRESETS, GENERAL_PRESETS, RECO_GROUPS, VISIT_TYPES, STAFF_ROWS, JOB_TITLES, OFFICIAL_ROLES, POSITION_CATS, PAGE_W, PAGE_H, MARGIN, CONTENT_W },
+  constants: {
+    RECORD_PRESETS, RECORD_ADDONS, RECORD_ROWS, RECO_PRESETS, GENERAL_PRESETS,
+    PAGE_W, PAGE_H, MARGIN, CONTENT_W,
+  },
+  recoGroups,
+  buildOptionsFile, downloadOptionsFile,
+  /* القوائم القابلة للتعديل (من options.js) */
+  lists: {
+    get: key => L.get(key),
+    all: () => (window.ADMHLists ? window.ADMHLists.exportAll() : {}),
+    api: () => (typeof window !== 'undefined' ? window.ADMHLists : null),
+  },
+  positionCats,
   state,
   init, loadAll, blankReport, blankSettings, migrate, defaultLibrary,
   buildModel, renderPreview, exportWord, validateReport,
