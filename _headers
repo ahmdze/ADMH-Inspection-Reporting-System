@@ -1,0 +1,40 @@
+# =============================================================================
+# رؤوس الأمان — تُطبَّق على استضافة Cloudflare Pages
+# الموقع ثابت بالكامل: لا سيرفر خاص بنا ولا قاعدة بيانات خاصة بنا.
+#
+# ملاحظة: المزامنة السحابية اختيارية. عند تفعيلها يتصل المتصفح مباشرةً بـ
+# Firebase، ولذلك تسمح السياسة أدناه بنطاقات Google/Firebase تحديداً.
+# عند عدم تفعيل المزامنة لا يحدث أي اتصال شبكي إطلاقاً.
+# =============================================================================
+
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), usb=(), payment=()
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://www.gstatic.com; font-src 'self' data:; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com https://*.cloudfunctions.net; frame-src https://*.firebaseapp.com https://accounts.google.com; form-action 'none'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'
+
+/app.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/sync.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/sw.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+  Cache-Control: public, max-age=3600
+
+/vendor/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/icons/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#004d40">
+<meta name="description" content="نظام إدخال بيانات الزيارة التفتيشية وزيارات المتابعة وتصدير تقرير Word">
+<title>نظام التقارير التفتيشية</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+:root{
+  --primary:#004d40; --primary-2:#00796b; --accent:#00897b;
+  --danger:#c62828; --warn:#ef6c00; --ok:#2e7d32; --info:#0277bd;
+  --bg:#eef2f5; --card:#fff; --border:#d3dae0; --border-2:#b9c4cc;
+  --text:#1b2429; --muted:#65727c; --input:#fff; --hover:rgba(0,0,0,.045);
+  --shadow:0 1px 3px rgba(16,32,40,.10),0 6px 18px rgba(16,32,40,.06);
+  --radius:10px; --tap:44px;
+}
+body.dark{
+  --primary:#00695c; --primary-2:#00897b; --accent:#26a69a;
+  --bg:#0f1517; --card:#1a2226; --border:#2c383e; --border-2:#3a484f;
+  --text:#e6edf1; --muted:#9aa8b1; --input:#222c31; --hover:rgba(255,255,255,.07);
+  --shadow:0 1px 3px rgba(0,0,0,.5),0 6px 18px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  font-family:'Segoe UI',Tahoma,'Noto Naskh Arabic',sans-serif;
+  background:var(--bg); color:var(--text); font-size:15px; line-height:1.6;
+  -webkit-text-size-adjust:100%;
+}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+
+/* ---------- App shell ---------- */
+.app{display:flex;min-height:100vh;flex-direction:column}
+.topbar{
+  position:sticky;top:0;z-index:100;background:var(--primary);color:#fff;
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  padding-top:calc(8px + env(safe-area-inset-top)); box-shadow:var(--shadow);
+}
+.topbar .brand{font-weight:700;font-size:.95em;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar .dot{width:9px;height:9px;border-radius:50%;background:#66bb6a;flex:none;box-shadow:0 0 0 2px rgba(255,255,255,.25);cursor:pointer;border:0;padding:0;transition:background .2s}
+.topbar .dot.off{background:#9e9e9e}
+.topbar .dot.busy{background:#ffb74d;animation:pulse 1s infinite}
+.topbar .dot.err{background:#ef5350}
+@keyframes pulse{50%{opacity:.35}}
+.iconbtn{
+  background:rgba(255,255,255,.14);color:#fff;border:0;border-radius:8px;
+  width:38px;height:38px;font-size:1.05em;cursor:pointer;flex:none;
+  display:inline-flex;align-items:center;justify-content:center;transition:background .18s;
+}
+.iconbtn:hover{background:rgba(255,255,255,.3)}
+.hamb{display:none}
+
+.layout{display:flex;flex:1;align-items:flex-start;gap:0;width:100%}
+.sidenav{
+  width:224px;flex:none;background:var(--card);border-inline-end:1px solid var(--border);
+  padding:12px 10px;position:sticky;top:56px;max-height:calc(100vh - 56px);overflow:auto;
+}
+.sidenav button{
+  display:flex;align-items:center;gap:9px;width:100%;text-align:start;background:transparent;
+  border:0;border-radius:8px;padding:11px 12px;cursor:pointer;color:var(--text);
+  font-size:.94em;margin-bottom:2px;min-height:var(--tap);
+}
+.sidenav button:hover{background:var(--hover)}
+.sidenav button.active{background:var(--primary-2);color:#fff;font-weight:600}
+.sidenav .navsec{font-size:.74em;color:var(--muted);padding:12px 12px 4px;font-weight:700;letter-spacing:.3px}
+.main{flex:1;min-width:0;padding:16px;max-width:1080px;margin:0 auto;width:100%}
+@media(max-width:860px){
+  .hamb{display:inline-flex}
+  .sidenav{
+    position:fixed;inset-block:0;inset-inline-start:0;top:0;height:100vh;max-height:none;
+    z-index:200;transform:translateX(100%);transition:transform .25s;width:260px;
+    padding-top:calc(12px + env(safe-area-inset-top));box-shadow:var(--shadow);
+  }
+  body[dir=rtl] .sidenav{transform:translateX(100%)}
+  .sidenav.open{transform:translateX(0)!important}
+  .main{padding:12px}
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:190;display:none}
+  .scrim.open{display:block}
+}
+
+/* ---------- Cards & sections ---------- */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px;box-shadow:var(--shadow)}
+.card>h2{margin:0 0 4px;font-size:1.02em;color:var(--primary-2);display:flex;align-items:center;gap:8px}
+.card>h2 .num{
+  background:var(--primary-2);color:#fff;width:26px;height:26px;border-radius:7px;flex:none;
+  display:inline-flex;align-items:center;justify-content:center;font-size:.82em;font-weight:700
+}
+.card .sub{color:var(--muted);font-size:.82em;margin:0 0 12px}
+.hint{font-size:.79em;color:var(--muted);margin-top:3px}
+.req{color:var(--danger)}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:12px}
+.f{display:flex;flex-direction:column;gap:5px;min-width:0}
+.f.wide{grid-column:1/-1}
+label{font-size:.82em;font-weight:600;color:var(--muted)}
+input[type=text],input[type=date],input[type=number],select,textarea{
+  background:var(--input);border:1px solid var(--border);border-radius:8px;
+  padding:10px 11px;width:100%;transition:border-color .15s,box-shadow .15s;min-height:var(--tap);
+}
+textarea{min-height:74px;resize:vertical;line-height:1.7}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,137,123,.15)}
+input.invalid,select.invalid{border-color:var(--danger);box-shadow:0 0 0 3px rgba(198,40,40,.13)}
+select{cursor:pointer;appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(0% + 13px) 50%,calc(0% + 18px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-inline-start:30px}
+
+/* ---------- Buttons ---------- */
+.btn{
+  background:var(--primary-2);color:#fff;border:0;border-radius:8px;padding:11px 15px;
+  cursor:pointer;font-weight:600;font-size:.92em;min-height:var(--tap);
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;transition:filter .15s,transform .06s;
+}
+.btn:hover{filter:brightness(.93)}
+.btn:active{transform:scale(.985)}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.btn.ghost{background:transparent;border:1px solid var(--border-2);color:var(--text)}
+.btn.ghost:hover{background:var(--hover)}
+.btn.sm{padding:7px 11px;font-size:.84em;min-height:36px}
+.btn.danger{background:var(--danger)}
+.btn.ok{background:var(--ok)}
+.btn.warn{background:var(--warn)}
+.btn.info{background:var(--info)}
+.btn.icon{padding:7px 9px;min-height:36px;font-size:.9em}
+.btnrow{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
+.btnrow .btn{flex:1 1 auto}
+@media(max-width:520px){.btnrow .btn{flex:1 1 100%}}
+.act{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+
+/* ---------- Tables ---------- */
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:10px;border:1px solid var(--border);border-radius:8px}
+table{width:100%;border-collapse:collapse;font-size:.88em;min-width:520px;background:var(--card)}
+th,td{border-bottom:1px solid var(--border);border-inline-end:1px solid var(--border);padding:8px 9px;text-align:start;vertical-align:middle}
+th{background:var(--primary-2);color:#fff;font-size:.85em;font-weight:600;white-space:nowrap;position:sticky;top:0;z-index:1}
+tr:last-child td{border-bottom:0}
+td:last-child,th:last-child{border-inline-end:0}
+tbody tr:hover td{background:var(--hover)}
+td input,td select,td textarea{min-height:38px;padding:7px 9px;font-size:.96em;min-width:90px;border-radius:6px}
+td.num{width:56px;text-align:center;color:var(--muted);font-weight:700}
+.empty{text-align:center;color:var(--muted);padding:22px;font-size:.9em}
+
+.chip{
+  display:inline-flex;align-items:center;gap:5px;background:rgba(0,137,123,.11);
+  border:1px solid rgba(0,137,123,.3);color:var(--accent);border-radius:999px;
+  padding:4px 10px;font-size:.78em;font-weight:600;cursor:pointer;min-height:32px;
+}
+.chip:hover{background:rgba(0,137,123,.2)}
+.chip.warn{background:rgba(239,108,0,.12);border-color:rgba(239,108,0,.35);color:var(--warn)}
+.chip.ok{background:rgba(46,125,50,.12);border-color:rgba(46,125,50,.35);color:var(--ok)}
+
+.picker{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+/* قائمة التقييمات الجاهزة: منطقة قابلة للتمرير حتى لا تتضخم صفوف الجدول */
+.pbody{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px;max-height:96px;overflow-y:auto;padding:5px;border:1px solid var(--border);border-radius:7px;background:var(--card)}
+.pbody .chip{font-size:.74em;padding:3px 8px;min-height:26px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.pbody .chip.ok{background:rgba(46,125,50,.2);border-color:rgba(46,125,50,.55);color:var(--ok);font-weight:700}
+
+/* ---------- Modal ---------- */
+.modal{position:fixed;inset:0;background:rgba(8,20,26,.6);z-index:900;display:none;align-items:flex-end;justify-content:center}
+.modal.open{display:flex}
+@media(min-width:700px){.modal{align-items:center;padding:20px}}
+.modal .sheet{
+  background:var(--card);width:100%;max-width:860px;max-height:92vh;overflow:auto;
+  border-radius:16px 16px 0 0;padding:16px;position:relative;
+}
+@media(min-width:700px){.modal .sheet{border-radius:var(--radius)}}
+.modal .sheet h3{margin:0 0 10px;color:var(--primary-2);font-size:1.02em}
+.x{position:sticky;top:0;float:inline-end;background:var(--card);border:0;border-radius:50%;width:36px;height:36px;font-size:1.3em;cursor:pointer;color:var(--muted);z-index:2}
+.x:hover{color:var(--danger);background:var(--hover)}
+
+/* ---------- Toast ---------- */
+#toasts{position:fixed;top:calc(62px + env(safe-area-inset-top));inset-inline:0;z-index:1200;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;padding:0 12px}
+.toast{background:#22303a;color:#fff;padding:10px 16px;border-radius:9px;font-size:.88em;box-shadow:0 6px 22px rgba(0,0,0,.32);max-width:min(560px,92vw);text-align:center;animation:tin .2s}
+.toast.ok{background:var(--ok)}.toast.err{background:var(--danger)}.toast.warn{background:var(--warn)}
+@keyframes tin{from{opacity:0;transform:translateY(-8px)}}
+
+/* ---------- Preview ---------- */
+.doc{
+  background:#fff;color:#000;padding:20px;border:1px solid var(--border);border-radius:8px;
+  direction:rtl;text-align:right;font-size:13px;line-height:1.85;
+}
+.doc h1{font-size:1.28em;color:#004d40;text-align:center;margin:10px 0 4px}
+.doc .hdr{text-align:center;border-bottom:3px double #004d40;padding-bottom:10px;margin-bottom:14px}
+.doc .hdr .l{color:#555;font-size:.87em;margin:1px 0}
+.doc .logo{max-height:76px;float:inline-start;margin-inline-end:10px}
+.doc h2{font-size:1.03em;color:#004d40;border-bottom:1.5px solid #00796b;padding-bottom:3px;margin:16px 0 8px}
+.doc p{margin:5px 0}
+.doc ul{margin:5px 0;padding-inline-start:22px}
+.doc li{margin:3px 0}
+.doc table{width:100%;border-collapse:collapse;margin:8px 0;font-size:.94em;min-width:0}
+.doc th,.doc td{border:1px solid #444;padding:5px 7px;text-align:right;vertical-align:top;background:none;color:#000;position:static}
+.doc th{background:#e0efec;font-weight:700;white-space:normal}
+.doc .rec{border:1px solid #98a6ae;border-radius:6px;padding:8px 11px;margin:6px 0}
+.doc .rec b{color:#004d40}
+.doc .sign{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px}
+.doc .sign div{flex:1 1 180px;border:1px solid #98a6ae;border-radius:6px;padding:8px;text-align:center}
+.doc .foot{margin-top:18px;border-top:1px solid #bbb;padding-top:6px;text-align:center;color:#666;font-size:.85em}
+
+/* ---------- misc ---------- */
+.scrim{display:none}
+kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.85em;font-family:inherit}
+.warnbox{background:rgba(239,108,0,.12);border:1px solid rgba(239,108,0,.4);border-radius:8px;padding:11px;font-size:.86em;margin-bottom:12px}
+.okbox{background:rgba(46,125,50,.1);border:1px solid rgba(46,125,50,.35);border-radius:8px;padding:11px;font-size:.86em;margin-bottom:12px}
+.hidden{display:none!important}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.bar .grow{flex:1;min-width:150px}
+.pill{background:var(--hover);border-radius:999px;padding:3px 10px;font-size:.78em;color:var(--muted)}
+@media print{
+  body{background:#fff}
+  .topbar,.sidenav,.scrim,.no-print,#toasts{display:none!important}
+  .main{padding:0;max-width:none}
+  .card{border:0;box-shadow:none;padding:0;margin:0}
+  .doc{border:0;padding:0;font-size:12pt}
+}
+</style>
+</head>
+<body>
+<div class="scrim" id="scrim"></div>
+<div class="app">
+
+  <header class="topbar no-print">
+    <button class="iconbtn hamb" id="hamb" title="القائمة">☰</button>
+    <span class="dot" id="dot" title="الحالة"></span>
+    <span class="brand" id="brand">نظام التقارير التفتيشية</span>
+    <button class="iconbtn" id="palBtn" title="لوحة الأوامر">⌘</button>
+    <button class="iconbtn" id="themeBtn" title="الوضع الليلي">🌙</button>
+    <button class="iconbtn" id="helpBtn" title="مساعدة">؟</button>
+  </header>
+
+  <div class="layout">
+    <nav class="sidenav no-print" id="nav">
+      <button data-go="report" class="active">📝 تحرير التقرير</button>
+      <button data-go="preview">👁️ معاينة التقرير</button>
+      <button data-go="archive">🗂️ الأرشيف <span class="pill" id="archCount">0</span></button>
+      <div class="navsec">أدوات</div>
+      <button data-go="library">📚 مكتبة العبارات</button>
+      <button data-go="settings">⚙️ الإعدادات</button>
+      <button data-go="help">❓ دليل الاستخدام</button>
+    </nav>
+
+    <main class="main">
+
+      <!-- ============ REPORT ============ -->
+      <section id="view-report">
+        <div class="bar no-print">
+          <div class="grow">
+            <label for="reportTitleBox">عنوان التقرير</label>
+            <input type="text" id="reportTitleBox" placeholder="تقرير الزيارة التفتيشية إلى ...">
+          </div>
+          <div style="min-width:180px">
+            <label for="f_visitDateTop">تاريخ الزيارة <span class="req">*</span></label>
+            <input type="date" id="f_visitDateTop">
+          </div>
+        </div>
+
+        <!-- 1 basic -->
+        <div class="card">
+          <h2><span class="num">1</span> بيانات الزيارة والمؤسسة</h2>
+          <div class="grid">
+            <div class="f">
+              <label for="f_visitType">نوع الزيارة</label>
+              <select id="f_visitType"></select>
+            </div>
+            <div class="f">
+              <label for="f_facilityKind">نوع المؤسسة</label>
+              <select id="f_facilityKind">
+                <option value="مركز صحي">مركز صحي</option>
+                <option value="مستشفى">مستشفى</option>
+                <option value="قطاع">قطاع</option>
+                <option value="مصحة">مصحة</option>
+                <option value="مذخر أدوية">مذخر أدوية</option>
+                <option value="أخرى">أخرى</option>
+              </select>
+            </div>
+            <div class="f">
+              <label for="f_facilityName">اسم المؤسسة <span class="req">*</span></label>
+              <input type="text" id="f_facilityName" list="dlFacilities" placeholder="مثال: مركز صحي الخناسة">
+              <datalist id="dlFacilities"></datalist>
+            </div>
+            <div class="f">
+              <label for="f_sector">الجهة التابعة (القطاع/الدائرة)</label>
+              <input type="text" id="f_sector" list="dlSectors" placeholder="مثال: قطاع المدائن">
+              <datalist id="dlSectors"></datalist>
+            </div>
+            <div class="f">
+              <label for="f_visitDate">تاريخ الزيارة <span class="req">*</span></label>
+              <input type="date" id="f_visitDate">
+            </div>
+            <div class="f">
+              <label for="f_dayName">اليوم</label>
+              <input type="text" id="f_dayName" placeholder="يُستخرج تلقائياً">
+            </div>
+            <div class="f">
+              <label for="f_bookNumber">رقم الكتاب / الأمر الإداري</label>
+              <input type="text" id="f_bookNumber" placeholder="اختياري">
+            </div>
+            <div class="f">
+              <label for="f_population">عدد النفوس المسجلة</label>
+              <input type="number" id="f_population" min="0" inputmode="numeric">
+            </div>
+            <div class="f">
+              <label for="f_families">عدد العوائل المسجلة</label>
+              <input type="number" id="f_families" min="0" inputmode="numeric">
+            </div>
+            <div class="f wide">
+              <label>محتوى التقرير</label>
+              <div class="picker" id="scopePicker">
+                <label class="chip"><input type="radio" name="f_scope" value="both" checked> البصمة والسجلات</label>
+                <label class="chip"><input type="radio" name="f_scope" value="fp"> البصمة فقط</label>
+                <label class="chip"><input type="radio" name="f_scope" value="rec"> السجلات فقط</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2 officials -->
+        <div class="card">
+          <h2><span class="num">2</span> المسؤولون</h2>
+          <p class="sub">أضف صفوفاً للمسؤولين. العنوان الوظيفي والاسم منفصلان ليظهرا في التقرير بصيغة «العنوان – الاسم».</p>
+          <div class="tw"><table id="tOfficials">
+            <thead><tr><th style="width:34%">الصفة / المنصب</th><th style="width:33%">العنوان الوظيفي</th><th style="width:33%">الاسم الثلاثي</th><th class="no-print" style="width:52px"></th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <div class="btnrow no-print">
+            <button class="btn ghost sm" data-add="officials">+ مسؤول</button>
+            <button class="btn ghost sm" id="btnStdOfficials">إضافة المسؤولين المعتادين</button>
+          </div>
+        </div>
+<!-- DATALISTS -->
+<!-- قوائم الاقتراحات خارج الجداول: إعادة رسم أي جدول كانت تمحوها -->
+<datalist id="dlRoles"></datalist>
+<datalist id="dlJobs"></datalist>
+<datalist id="dlSectors"></datalist>
+<datalist id="dlFacilities"></datalist>
+
+        <!-- 3 staff -->
+        <div class="card">
+          <h2><span class="num">3</span> الملاك الكلي والفعلي</h2>
+          <p class="sub">اترك الحقول فارغة للسطور التي لا تريد ظهورها. تُحسب النسبة آلياً.</p>
+          <div class="tw"><table id="tStaff">
+            <thead><tr><th style="width:40%">الفئة</th><th>الكلي</th><th>الفعلي</th><th>النقص</th><th>النسبة</th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+        </div>
+
+        <!-- 4 fingerprint -->
+        <div class="card" id="cardFingerprint">
+          <h2><span class="num">4</span> أولاً: وحدة البصمة</h2>
+          <div class="grid">
+            <div class="f">
+              <label for="f_fpManagerJob">العنوان الوظيفي لمسؤول البصمة</label>
+              <input type="text" id="f_fpManagerJob" list="dlJobs" placeholder="مثال: تقني أجهزة طبية">
+            </div>
+            <div class="f">
+              <label for="f_fpManagerName">اسم مسؤول البصمة</label>
+              <input type="text" id="f_fpManagerName">
+            </div>
+            <div class="f">
+              <label for="f_fpDeputyJob">العنوان الوظيفي للرديف</label>
+              <input type="text" id="f_fpDeputyJob" list="dlJobs">
+            </div>
+            <div class="f">
+              <label for="f_fpDeputyName">اسم الرديف</label>
+              <input type="text" id="f_fpDeputyName">
+            </div>
+            <div class="f">
+              <label for="f_fpDevices">عدد أجهزة البصمة</label>
+              <input type="text" id="f_fpDevices" placeholder="مثال: 1  أو  5 شغالة + 1 عاطل">
+            </div>
+            <div class="f">
+              <label for="f_fpDeviceState">حالة الأجهزة</label>
+              <input type="text" id="f_fpDeviceState" list="dlDeviceState" placeholder="اكتب أو اختر">
+              <datalist id="dlDeviceState">
+                <option value="صالح للعمل"></option>
+                <option value="عاطل"></option>
+                <option value="بعضها عاطل"></option>
+              </datalist>
+            </div>
+            <div class="f">
+              <label for="f_fpStaff">عدد كادر البصمة</label>
+              <input type="text" id="f_fpStaff" placeholder="مثال: 2 (شخصان فقط)">
+            </div>
+            <div class="f">
+              <label for="f_fpAdminCount">عدد الآدمن</label>
+              <input type="text" id="f_fpAdminCount" placeholder="مثال: 1">
+            </div>
+            <div class="f wide">
+              <label for="f_fpAdminWhere">جهة الآدمن</label>
+              <input type="text" id="f_fpAdminWhere" placeholder="مثال: في الجهاز فقط / من القطاع / في الجهاز: المسؤول والرديف">
+            </div>
+            <div class="f">
+              <label for="f_fpReportFreq">دورية رفع الموقف</label>
+              <select id="f_fpReportFreq">
+                <option value="">— بدون —</option>
+                <option value="يومياً">يومياً</option>
+                <option value="أسبوعياً">أسبوعياً</option>
+                <option value="شهرياً">شهرياً</option>
+              </select>
+            </div>
+            <div class="f">
+              <label for="f_fpReportTo">تُرفع إلى</label>
+              <select id="f_fpReportTo">
+                <option value="">— بدون —</option>
+                <option value="المدير">المدير</option>
+                <option value="القطاع">القطاع</option>
+              </select>
+            </div>
+            <div class="f wide">
+              <label for="f_fpNotes">ملاحظات إضافية على وحدة البصمة</label>
+              <textarea id="f_fpNotes" rows="2" placeholder="اختياري"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5 procedures -->
+        <div class="card" id="cardProcedures">
+          <h2><span class="num">5</span> ثانياً: الإجراءات المتخذة خلال الزيارة</h2>
+          <p class="sub">تُولَّد الصياغة تلقائياً من التاريخ ونوع التدقيق. أضف كل يوم جرى تدقيق موقفه.</p>
+          <div class="tw"><table id="tProcs">
+            <thead><tr><th style="width:110px">التاريخ</th><th style="width:120px">نوع التدقيق</th><th style="width:34%">جهة السحب/المصدر</th><th>ملاحظة إضافية</th><th class="no-print" style="width:52px"></th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <div class="btnrow no-print"><button class="btn ghost sm" data-add="procs">+ إجراء</button></div>
+          <div class="f wide" style="margin-top:12px">
+            <label for="f_procExtra">بنود إضافية في الإجراءات (سطر لكل بند)</label>
+            <textarea id="f_procExtra" rows="2" placeholder="مثال: إجراء تدقيق شامل لكافة السجلات الموجودة في وحدة الإدارة والخدمات."></textarea>
+          </div>
+        </div>
+
+        <!-- 6 general notes -->
+        <div class="card">
+          <h2><span class="num">6</span> الملاحظات العامة</h2>
+          <p class="sub">الملاحظات التي لا تتعلق بموقف بصمة معيّن. من مكتبة العبارات أو بكتابتك.</p>
+          <div id="genNotes"></div>
+          <div class="btnrow no-print">
+            <button class="btn ghost sm" data-add="genNotes">+ ملاحظة</button>
+            <button class="btn ghost sm" data-lib="general">📚 من المكتبة</button>
+          </div>
+        </div>
+
+        <!-- 7 attendance -->
+        <div class="card">
+          <h2><span class="num">7</span> مواقف البصمة والحضور</h2>
+          <p class="sub">لكل يوم تدقيق: أضف «موقف» ثم وزّع الأسماء على فئات المخالفة الأربع.</p>
+          <div id="positions"></div>
+          <div class="btnrow no-print">
+            <button class="btn sm" data-add="position">+ موقف بصمة / حضور</button>
+          </div>
+        </div>
+
+        <!-- 8 records -->
+        <div class="card" id="cardRecords">
+          <h2><span class="num">8</span> ثالثاً: السجلات الإدارية</h2>
+          <p class="sub">
+            لكل سجل: اختر تقييماً جاهزاً أو أكثر (بنقرة)، ويمكنك إضافة تقييم مكتوب بيدك.
+            السطور الفارغة لا تظهر في التقرير.
+          </p>
+          <div class="tw"><table id="tRecords">
+            <thead><tr><th style="width:52px">ت</th><th style="width:26%">اسم السجل</th><th>التقييم</th><th class="no-print" style="width:52px"></th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <div class="btnrow no-print">
+            <button class="btn ghost sm" data-add="records">+ سجل</button>
+            <button class="btn ghost sm" id="btnAllRecords">إضافة كل السجلات المعتادة</button>
+            <button class="btn ghost sm" id="btnBulkRecords">تقييم جماعي</button>
+          </div>
+        </div>
+
+        <!-- 9 recommendations -->
+        <div class="card">
+          <h2><span class="num">9</span> التوصيات</h2>
+          <p class="sub">التوصيات موزّعة على الجهات بأحرف (أ/ ب/ ج/ ...). كل جهة تحتوي بنوداً مرقّمة.</p>
+          <div id="recGroups"></div>
+          <div class="btnrow no-print">
+            <button class="btn sm" data-add="recGroup">+ جهة توصيات</button>
+            <button class="btn ghost sm" id="btnStdRecs">إضافة الجهات المعتادة</button>
+            <button class="btn ghost sm" data-lib="reco">📚 مكتبة التوصيات</button>
+          </div>
+        </div>
+
+        <!-- 10 follow-up + signatures -->
+        <div class="card">
+          <h2><span class="num">10</span> متابعة التوصيات السابقة</h2>
+          <div class="tw"><table id="tPrevRecs">
+            <thead><tr><th style="width:52px">ت</th><th style="width:44%">التوصية السابقة</th><th style="width:22%">الحالة</th><th>ملاحظة</th><th class="no-print" style="width:52px"></th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <div class="btnrow no-print"><button class="btn ghost sm" data-add="prevRecs">+ توصية سابقة</button></div>
+        </div>
+
+        <div class="card">
+          <h2><span class="num">11</span> فريق التفتيش والتوقيعات</h2>
+          <div class="tw"><table id="tSigners">
+            <thead><tr><th style="width:52px">ت</th><th style="width:34%">الاسم الثلاثي</th><th style="width:33%">العنوان الوظيفي</th><th>التاريخ</th><th class="no-print" style="width:52px"></th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <div class="btnrow no-print"><button class="btn ghost sm" data-add="signers">+ عضو</button></div>
+          <div class="f wide" style="margin-top:12px">
+            <label for="f_footerNote">ملاحظة أسفل التقرير</label>
+            <input type="text" id="f_footerNote" placeholder="اختياري">
+          </div>
+        </div>
+
+        <div class="btnrow no-print" style="margin-bottom:30px">
+          <button class="btn ok" id="btnWord">📄 تصدير Word (.docx)</button>
+          <button class="btn info" id="btnPreviewGo">👁️ معاينة</button>
+          <button class="btn ghost" id="btnNew">🆕 تقرير جديد</button>
+          <button class="btn ghost" id="btnSaveLocal">💾 حفظ في الأرشيف</button>
+        </div>
+      </section>
+
+      <!-- ============ PREVIEW ============ -->
+      <section id="view-preview" class="hidden">
+        <div class="bar no-print">
+          <button class="btn ghost sm" data-go="report">← رجوع للتحرير</button>
+          <span class="pill" id="previewMeta"></span>
+          <span style="flex:1"></span>
+          <button class="btn ok sm" id="btnWord2">📄 تصدير Word</button>
+          <button class="btn ghost sm" id="btnPrint">🖨️ طباعة</button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <div class="doc" id="docPreview"></div>
+        </div>
+      </section>
+
+      <!-- ============ ARCHIVE ============ -->
+      <section id="view-archive" class="hidden">
+        <div class="card">
+          <h2>🗂️ الأرشيف</h2>
+          <p class="sub">التقارير محفوظة في هذا المتصفح على هذا الجهاز. صدّر نسخة احتياطية بانتظام.</p>
+          <div class="grid">
+            <div class="f"><label for="archSearch">بحث</label><input type="text" id="archSearch" placeholder="اسم المؤسسة / القطاع / العنوان"></div>
+            <div class="f"><label for="archType">نوع الزيارة</label><select id="archType"></select></div>
+            <div class="f"><label for="archSort">الترتيب</label>
+              <select id="archSort">
+                <option value="new">الأحدث أولاً</option>
+                <option value="old">الأقدم أولاً</option>
+                <option value="name">اسم المؤسسة</option>
+              </select>
+            </div>
+          </div>
+          <div class="tw"><table id="tArchive">
+            <thead><tr><th>العنوان</th><th style="width:120px">المؤسسة</th><th style="width:110px">التاريخ</th><th style="width:90px">النوع</th><th class="no-print" style="width:210px">إجراءات</th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <div class="btnrow">
+            <button class="btn ghost sm" id="btnExportAll">⬇️ تصدير كل الأرشيف (JSON)</button>
+            <button class="btn ghost sm" id="btnImport">⬆️ استيراد من JSON</button>
+            <input type="file" id="fileImport" accept=".json,application/json" class="hidden">
+          </div>
+          <p class="hint" id="archStats"></p>
+        </div>
+      </section>
+
+      <!-- ============ LIBRARY ============ -->
+      <section id="view-library" class="hidden">
+        <div class="card">
+          <h2>📚 مكتبة العبارات</h2>
+          <p class="sub">عبارات مصحّحة إملائياً مستخرجة من تقاريرك. تُستخدم في القوائم الجاهزة.</p>
+          <div class="bar">
+            <select id="libKind" class="grow">
+              <option value="records">تقييمات السجلات</option>
+              <option value="reco">التوصيات المتكررة</option>
+              <option value="general">الملاحظات العامة</option>
+            </select>
+            <button class="btn sm" id="btnLibAdd">+ إضافة عبارة</button>
+          </div>
+          <div id="libList"></div>
+        </div>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section id="view-settings" class="hidden">
+        <div class="card">
+          <h2>⚙️ الإعدادات</h2>
+          <div class="grid">
+            <div class="f wide"><label for="s_l1">السطر الأول في الترويسة</label><input type="text" id="s_l1"></div>
+            <div class="f wide"><label for="s_l2">السطر الثاني</label><input type="text" id="s_l2"></div>
+            <div class="f wide"><label for="s_l3">السطر الثالث</label><input type="text" id="s_l3"></div>
+            <div class="f"><label for="s_font">خط ملف Word</label>
+              <select id="s_font">
+                <option value="Arial">Arial (متوفر دائماً)</option>
+                <option value="Traditional Arabic">Traditional Arabic</option>
+                <option value="Simplified Arabic">Simplified Arabic</option>
+                <option value="Sakkal Majalla">Sakkal Majalla</option>
+                <option value="Times New Roman">Times New Roman</option>
+              </select>
+            </div>
+            <div class="f"><label for="s_fontSize">حجم الخط (نقطة)</label>
+              <select id="s_fontSize">
+                <option value="11">11</option><option value="12" selected>12</option>
+                <option value="13">13</option><option value="14">14</option>
+              </select>
+            </div>
+            <div class="f"><label for="s_logo">شعار المؤسسة</label><input type="file" id="s_logo" accept="image/*"></div>
+            <div class="f"><label>&nbsp;</label><button class="btn ghost sm" id="btnLogoDel">إزالة الشعار</button></div>
+          </div>
+          <div class="btnrow"><button class="btn ok" id="btnSettingsSave">حفظ الإعدادات</button></div>
+        </div>
+        <div class="card">
+          <h2>☁️ المزامنة السحابية <span class="pill">لمشاركة التقارير بين أجهزتك</span></h2>
+          <p class="sub">
+            لجعل التقارير تظهر على هاتفك وحاسوبك معاً. التطبيق يعمل كاملاً بدونها.
+          </p>
+
+          <div class="warnbox hidden" id="syncWarn"></div>
+
+          <div id="syncOff">
+            <div class="grid">
+              <div class="f"><label for="syncEmail">البريد الإلكتروني</label><input type="text" id="syncEmail" placeholder="you@example.com" autocomplete="username"></div>
+              <div class="f"><label for="syncPassword">كلمة المرور</label><input type="password" id="syncPassword" placeholder="6 أحرف على الأقل" autocomplete="current-password"></div>
+            </div>
+            <p class="hint">
+              استخدم البريد نفسه على كل أجهزتك. إن لم يكن الحساب موجوداً سيُنشأ تلقائياً.
+            </p>
+            <div class="btnrow"><button class="btn ok" id="btnSyncConnect">🔗 تفعيل المزامنة والدخول</button></div>
+          </div>
+
+          <div id="syncOn" class="hidden">
+            <div class="okbox" id="syncAccount" role="button" tabindex="0" style="cursor:pointer"></div>
+            <div class="grid">
+              <div class="f"><label>الحالة</label><div id="syncStateText" style="font-weight:600">—</div></div>
+              <div class="f"><label>آخر مزامنة</label><div id="syncLastText" style="font-weight:600">—</div></div>
+              <div class="f"><label>هذا الجهاز</label><div id="syncDeviceText" style="font-weight:600">—</div></div>
+            </div>
+            <div class="btnrow">
+              <button class="btn ok" id="btnSyncNow">🔄 مزامنة الآن</button>
+              <button class="btn danger" id="btnSyncSignOut">🚪 إيقاف المزامنة على هذا الجهاز</button>
+            </div>
+          </div>
+
+          <details style="margin-top:14px" id="syncHelpBox">
+            <summary style="cursor:pointer;font-weight:600;color:var(--primary-2)">مطلوب مرة واحدة في لوحة Firebase</summary>
+            <ol style="padding-inline-start:20px;line-height:1.95;margin-top:10px">
+              <li>افتح <b>console.firebase.google.com</b> ← مشروع <code>admh-inspection-reporting-sys</code>.</li>
+              <li><b>Build</b> ← <b>Authentication</b> ← <b>Get started</b>، وفعّل <b>Email/Password</b>.</li>
+              <li><b>Build</b> ← <b>Firestore Database</b> ← <b>Create database</b> (Production mode، وأقرب موقع: me-west1).</li>
+              <li>من تبويب <b>Rules</b> الصق القواعد الموجودة في <code>README.md</code> ثم <b>Publish</b>. <b>هذه الخطوة إلزامية.</b></li>
+              <li>عادياً تُضاف نطاقات النشر تلقائياً؛ إن ظهر خطأ «نطاق غير مصرّح» فأضف نطاق موقعك في
+                  <b>Authentication</b> ← <b>Settings</b> ← <b>Authorized domains</b>.</li>
+            </ol>
+          </details>
+        </div>
+
+        <div class="card">
+          <h2>💾 النسخ الاحتياطي والبيانات</h2>
+          <div class="btnrow">
+            <button class="btn ghost" id="btnExportAll2">⬇️ تصدير كل الأرشيف</button>
+            <button class="btn ghost" id="btnImport2">⬆️ استيراد</button>
+            <button class="btn danger" id="btnWipe">🗑️ حذف كل البيانات</button>
+          </div>
+          <p class="hint" id="storeInfo"></p>
+        </div>
+      </section>
+
+      <!-- ============ HELP ============ -->
+      <section id="view-help" class="hidden">
+        <div class="card">
+          <h2>❓ دليل الاستخدام</h2>
+          <ol style="padding-inline-start:20px;line-height:2">
+            <li>املأ «بيانات الزيارة والمؤسسة» — اسم المؤسسة وتاريخ الزيارة إلزاميان.</li>
+            <li>أضف المسؤولين. زر «إضافة المسؤولين المعتادين» يضيف الصفوف الشائعة.</li>
+            <li>أدخل الملاك الكلي والفعلي. النسبة تُحسب تلقائياً.</li>
+            <li>املأ وحدة البصمة. «دورية رفع الموقف» تُدرج في التقرير ضمن آلية الرفع.</li>
+            <li>في «الإجراءات»: كل يوم جرى تدقيق موقفه = صف واحد. الصياغة تُبنى تلقائياً.</li>
+            <li>في «مواقف البصمة»: أضف موقفاً لكل يوم، ثم أضف الأسماء في الفئة الصحيحة. أدخل العنوان الوظيفي ثم الاسم ليظهرا معاً.</li>
+            <li>في «السجلات»: استخدم «إضافة كل السجلات المعتادة» ثم «تعبئة التقييمات الجاهزة»، ثم عدّل ما يلزم. أو «تقييم جماعي» لتعبئة تقييم واحد لعدة سجلات.</li>
+            <li>في «التوصيات»: أضف الجهات، ثم استخدم «مكتبة التوصيات» لإدراج العبارات المتكررة.</li>
+            <li>اضغط «تصدير Word» لحفظ ملف <code>.docx</code> جاهز للطباعة والاعتماد.</li>
+            <li>اضغط «حفظ في الأرشيف» ليبقى التقرير متاحاً للاسترجاع لاحقاً.</li>
+          </ol>
+          <h2 style="margin-top:16px">⌨️ اختصارات</h2>
+          <p><kbd>Ctrl</kbd>+<kbd>S</kbd> حفظ في الأرشيف &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>E</kbd> تصدير Word &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>P</kbd> معاينة &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>K</kbd> لوحة الأوامر &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>D</kbd> الوضع الليلي</p>
+          <div class="okbox" style="margin-top:12px">
+            <b>النسخ الاحتياطي:</b> البيانات محفوظة داخل هذا المتصفح فقط. إن حذفت بيانات المتصفح فستفقد.
+            صدّر ملف JSON من الأرشيف بانتظام، واحفظه في مكان آمن.
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<!-- command palette -->
+<div class="modal" id="palModal"><div class="sheet" style="max-width:520px">
+  <button class="x" data-close>&times;</button>
+  <h3>لوحة الأوامر</h3>
+  <input type="text" id="palInput" placeholder="اكتب أمراً... (تقرير جديد، تصدير، أرشيف، معاينة)" autocomplete="off">
+  <div id="palList" style="margin-top:10px"></div>
+</div></div>
+
+<div class="modal" id="libModal"><div class="sheet">
+  <button class="x" data-close>&times;</button>
+  <h3 id="libModalTitle">العبارات الجاهزة</h3>
+  <input type="text" id="libFilter" placeholder="تصفية..." style="margin-bottom:10px">
+  <div id="libModalList"></div>
+</div></div>
+
+<div class="modal" id="bulkModal"><div class="sheet" style="max-width:560px">
+  <button class="x" data-close>&times;</button>
+  <h3>تقييم جماعي للسجلات</h3>
+  <p class="hint">اختر التقييم الذي تريد تطبيقه على كل السجلات الفارغة، أو على السجلات المحددة.</p>
+  <div class="f"><label for="bulkText">نص التقييم</label><textarea id="bulkText" rows="3"></textarea></div>
+  <div class="picker" id="bulkPresets"></div>
+  <div class="btnrow">
+    <button class="btn sm" id="bulkFillEmpty">طبّق على السجلات الفارغة فقط</button>
+    <button class="btn danger sm" id="bulkFillAll">طبّق على الكل (استبدال)</button>
+  </div>
+</div></div>
+
+<script src="vendor/docx.umd.js"></script>
+<script src="sync.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
