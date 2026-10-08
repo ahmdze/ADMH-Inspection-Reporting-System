@@ -411,7 +411,7 @@ _tools/               أدوات التطوير والاختبار (غير من�
 node _tools/edge.js                 # 30 اختباراً: أدوات مساعدة، سلامة المكتبة، حالات حدية
 node _tools/notables_test.js        # 21 اختباراً: النطاق، العنوان التلقائي، الفئات، خلوّ Word من الجداول
 node _tools/auth_test.js            # 39 اختباراً: الدخول بحساب Google، العودة من إعادة التوجيه
-node _tools/popup_test.js           # 66 اختباراً: استرجاع الجلسة + Google Identity Services
+node _tools/popup_test.js           # 73 اختباراً: استرجاع الجلسة + Google Identity Services
 node _tools/sync_test.js            # 31 اختباراً لمحرّك المزامنة بـ Firebase وهمي
 node _tools/app_sync_test.js        # 28 اختباراً لترابط الواجهة مع المزامنة
 node _tools/form_test.js            # 20 اختباراً للنموذج

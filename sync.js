@@ -49,7 +49,7 @@
          2) قواعد أمان Firestore في Firebase.
        لذلك لا بأس بتضمينه، ولا حاجة لسرّية العميل (Client Secret) إطلاقاً.
        ------------------------------------------------------------------------- */
-    googleClientId: "744885015267-gp8dnfvsdk08vl712hpot371fndn1886.apps.googleusercontent.com",
+    googleClientId: "744885015267-fr614gdn063p4ieamisa2jm6d0nmkm4v.apps.googleusercontent.com",
   };
 
   const state = {
@@ -192,7 +192,13 @@
   let gisClientCid = '';     /* المعرّف الذي بُني به */
   let prepPromise = null;    /* وعد التجهيز المسبق */
   let gisLastResponse = null;/* آخر استجابة من Google — للتشخيص */
-  function gisDiagnostics() { return gisLastResponse; }
+  let gisLastError = null;   /* آخر خطأ من Google Identity — للتشخيص */
+  function gisDiagnostics() {
+    return {
+      response: gisLastResponse,
+      error: gisLastError,
+    };
+  }
 
   /** يُنشئ عميل الرمز ويُخزّنه (يُستدعى من التجهيز المسبق أو عند الحاجة) */
   function ensureGisClient(cid) {
@@ -232,7 +238,15 @@
         ensureGisClient(cid);
         return true;
       })
-      .catch(() => { prepPromise = null; return false; });
+      .catch(err => {
+        gisLastError = {
+          code: (err && err.code) || 'gis/prepare-failed',
+          message: (err && err.message) ? err.message : String(err),
+          response: null,
+        };
+        prepPromise = null;
+        return false;
+      });
     return prepPromise;
   }
   function googleReady() { return !!gisClient && gisClientCid === googleClientId(); }
@@ -388,6 +402,12 @@
         gisClient.requestAccessToken();
       } catch (err) {
         clearTimeout(timer);
+        /* نسجّل سبب GIS الحقيقي — يظهر في صفحة الفحص */
+        gisLastError = {
+          code: 'gis/request-threw',
+          message: (err && err.message) ? err.message : String(err),
+          response: gisLastResponse,
+        };
         const e = new Error('تعذّر بدء الدخول من Google: ' + (err && err.message ? err.message : err));
         e.code = 'gis/init-failed';
         finish(reject, e);
@@ -417,6 +437,11 @@
       try {
         ensureGisClient(cid);
       } catch (initErr) {
+        gisLastError = {
+          code: 'gis/ensure-threw',
+          message: (initErr && initErr.message) ? initErr.message : String(initErr),
+          response: null,
+        };
         const e = new Error('تعذّر تجهيز الدخول من Google: ' + (initErr && initErr.message));
         e.code = 'gis/init-failed';
         throw e;
@@ -580,24 +605,34 @@
        ----------------------------------------------------------------- */
     const cid = googleClientId();
     if (cid) {
-      return signInWithGis(cid).catch(err => {
-        const code = (err && err.code) || '';
-
+      return signInWithGis(cid).catch(gisErr => {
         /* -----------------------------------------------------------------
-           لا رمز هوية ولا رمز وصول: ننتقل إلى مسار Firebase الاحتياطي.
-           وإن فشل هو أيضاً، نُظهر سبب Google Identity — فهو الأدق — لأن
-           رسالة Firebase العامة لا تصف المشكلة الحقيقية.
+           نحتفظ بسبب Google Identity دائماً — فهو الأدق.
+           مسار Firebase الاحتياطي يعطي رسائل عامة مضلِّلة مثل «هذه البيئة
+           لا تدعم نوافذ الدخول»، وهي لا تصف عطل Google Identity إطلاقاً.
            ----------------------------------------------------------------- */
-        if (code === 'gis/no-token' || code === 'gis/no-id-token') {
-          return signInWithFirebaseGoogle().catch(() => { throw err; });
-        }
+        gisLastError = {
+          code: (gisErr && gisErr.code) || '',
+          message: (gisErr && gisErr.message) || String(gisErr),
+          response: gisLastResponse,
+        };
+
+        const code = (gisErr && gisErr.code) || '';
+
+        /* مسار Firebase فرصة أخيرة، وإن فشل نُعيد سبب Google Identity */
+        const fallback = () => signInWithFirebaseGoogle().catch(() => { throw gisErr; });
 
         const retryable =
+          code === 'gis/no-token' || code === 'gis/no-id-token' ||
           code === 'gis/init-failed' || code === 'gis/not-ready' ||
           code === 'auth/timeout' || code === 'auth/cancelled' ||
-          code === 'auth/access_denied' || code === 'auth/popup_closed';
-        if (!retryable) throw err;
-        return signInWithFirebaseGoogle();
+          code === 'auth/access_denied' || code === 'auth/popup_closed' ||
+          code === 'auth/operation-not-supported-in-this-environment' ||
+          code === 'auth/internal-error' || code === 'auth/popup-blocked';
+        if (retryable) return fallback();
+
+        /* خطأ حقيقي من Google Identity: نُظهره كما هو */
+        throw gisErr;
       });
     }
 
