@@ -191,6 +191,8 @@
   let gisClient = null;      /* عميل الرمز المُهيَّأ */
   let gisClientCid = '';     /* المعرّف الذي بُني به */
   let prepPromise = null;    /* وعد التجهيز المسبق */
+  let gisLastResponse = null;/* آخر استجابة من Google — للتشخيص */
+  function gisDiagnostics() { return gisLastResponse; }
 
   /** يُنشئ عميل الرمز ويُخزّنه (يُستدعى من التجهيز المسبق أو عند الحاجة) */
   function ensureGisClient(cid) {
@@ -207,6 +209,13 @@
       scope: 'openid email profile',
       /* نضع نداءً افتراضياً يُستبدل عند كل محاولة */
       callback: () => {},
+      /* -----------------------------------------------------------------
+         FedCM: واجهة الهوية الفيدرالية.
+         كروم يحجب كوكيز الطرف الثالث، وهذا يمنع Google من إكمال تدفّق
+         النافذة فيغيب رمز الهوية. FedCM يعمل بلا كوكيز طرف ثالث إطلاقاً،
+         وهو الحل الرسمي من Google، ويدعمه كروم على أندرويد.
+         ----------------------------------------------------------------- */
+      use_fedcm_for_prompt: true,
     });
     return gisClient;
   }
@@ -323,11 +332,36 @@
           return;
         }
         if (!resp.id_token) {
-          const e = new Error('لم يُعِد Google رمز الهوية. أضف نطاقك في Authorized JavaScript origins.');
+          /* -----------------------------------------------------------------
+             لم يصل رمز الهوية. أشهر سببين:
+               ١) كروم يحجب كوكيز الطرف الثالث — فيحتاج FedCM
+               ٢) النطاق غير مسجَّل في Authorized JavaScript origins
+             نُخزّن الاستجابة الخام والرموز المتاحة للتشخيص الدقيق.
+             ----------------------------------------------------------------- */
+          gisLastResponse = {
+            hasAccessToken: !!(resp && resp.access_token),
+            hasIdToken: false,
+            scope: (resp && resp.scope) || '',
+            keys: resp ? Object.keys(resp).join(',') : '(none)',
+          };
+          const e = new Error(
+            'لم يُعِد Google رمز الهوية.\n' +
+            'تأكد من أمرين: (١) أن نطاقك مضاف في Authorized JavaScript origins ' +
+            'بحرفه وبالبروتوكول، (٢) أن كوكيز الطرف الثالث غير محجوبة في متصفحك ' +
+            '(كروم ← الإعدادات ← الخصوصية ← كوكيز الطرف الثالث).\n' +
+            'وصل من Google: ' + (gisLastResponse.keys || 'لا شيء'));
           e.code = 'gis/no-id-token';
+          e.raw = gisLastResponse;
           finish(reject, e);
           return;
         }
+        /* وصل رمز الهوية: نسجّل النجاح ونُنظّف التشخيص */
+        gisLastResponse = {
+          hasAccessToken: !!(resp && resp.access_token),
+          hasIdToken: true,
+          scope: (resp && resp.scope) || '',
+          keys: resp ? Object.keys(resp).join(',') : '(none)',
+        };
         /* نحوّل رمز Google إلى جلسة Firebase.
            نلفّ التحويل بـ try لأن بعض نسخ المكتبة قد لا تُوفّر
            provider.credential — فنُظهر سبباً واضحاً بدل خطأ غامض. */
@@ -549,13 +583,20 @@
     if (cid) {
       return signInWithGis(cid).catch(err => {
         const code = (err && err.code) || '';
-        /* إن فشل GIS لسبب قابل للتجاوز، ننتقل إلى مسار Firebase المعتاد.
-           الإلغاء وعدم اختيار حساب من هذه الأسباب أيضاً. */
+
+        /* -----------------------------------------------------------------
+           رمز الهوية غاب: نُجرّب مسار Firebase الاحتياطي.
+           لكن إن فشل هو أيضاً، نُظهر سبب Google Identity — فهو الأدق —
+           لأن رسالة Firebase العادية تفشل في وصف المشكلة الحقيقية.
+           ----------------------------------------------------------------- */
+        if (code === 'gis/no-id-token') {
+          return signInWithFirebaseGoogle().catch(() => { throw err; });
+        }
+
         const retryable =
           code === 'gis/init-failed' || code === 'gis/not-ready' ||
           code === 'auth/timeout' || code === 'auth/cancelled' ||
-          code === 'auth/access_denied' || code === 'auth/popup_closed' ||
-          /id-token/i.test(code);
+          code === 'auth/access_denied' || code === 'auth/popup_closed';
         if (!retryable) throw err;
         return signInWithFirebaseGoogle();
       });
@@ -1044,6 +1085,8 @@
     prepareGoogle,
     /** هل المكتبة جاهزة للطلب الفوري؟ */
     googleReady,
+    /** آخر استجابة من Google — للتشخيص */
+    gisDiagnostics,
     /** يُعالج نتيجة إعادة التوجيه عند العودة من Google */
     consumeRedirect,
     /** آخر خطأ من إعادة التوجيه (للتشخيص) */

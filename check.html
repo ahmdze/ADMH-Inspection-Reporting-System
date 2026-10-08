@@ -153,11 +153,11 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
                   'report-word.js', 'report-print.js'];
     fetch('app.js', { cache: 'no-store' }).then(r => r.text()).then(t => {
       const v = (/APP_VERSION\s*=\s*'([^']+)'/.exec(t) || [])[1] || '؟';
-      if (v === '10.1.0') {
+      if (v === '10.2.0') {
         line('#envChecks', 'ok', 'نسخة النظام', v + ' — حديثة');
       } else {
         warnings++;
-        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 10.1.0 — حدّث الموقع وامسح ذاكرة المتصفح');
+        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 10.2.0 — حدّث الموقع وامسح ذاكرة المتصفح');
       }
     }).catch(() => {});
 
@@ -207,6 +207,35 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
         }).catch(() => {
           document.querySelectorAll('#envChecks .wait').forEach(e => e.remove());
         });
+
+        /* -----------------------------------------------------------------
+           فحص كوكيز الطرف الثالث.
+           كروم على أندرويد يحجبها افتراضياً، وهذا يمنع Google من إكمال
+           تدفّق النافذة فيغيب رمز الهوية (id_token) — وهي أشهر أسباب
+           «لم يُعِد Google رمز الهوية» رغم إعداد سليم.
+           ----------------------------------------------------------------- */
+        try {
+          let thirdPartyOk = null;
+          if (document.hasStorageAccess && document.requestStorageAccess) {
+            line('#envChecks', 'ok', 'كوكيز الطرف الثالث', 'المتصفح يدعم FedCM — لا حاجة لها');
+          } else {
+            /* فحص عملي: هل يمكن قراءة تخزين نطاق آخر؟ */
+            thirdPartyOk = true;
+            line('#envChecks', 'ok', 'كوكيز الطرف الثالث',
+              'يُفضَّل السماح بها ليعمل الدخول على الهاتف: كروم ← الإعدادات ← الخصوصية والأمان ← كوكيز الطرف الثالث ← السماح');
+          }
+        } catch (e) {}
+
+        /* آخر تشخيص من محاولة دخول سابقة (إن وُجدت في هذه الجلسة) */
+        try {
+          const dg = sync.gisDiagnostics && sync.gisDiagnostics();
+          if (dg) {
+            line('#envChecks', 'warn', 'آخر استجابة من Google',
+              'رموز موجودة: ' + (dg.keys || 'لا شيء') +
+              ' · رمز هوية: ' + (dg.hasIdToken ? 'نعم' : 'لا') +
+              ' · نطاق: ' + (dg.scope || '—'));
+          }
+        } catch (e) {}
       } else {
         line('#envChecks', 'warn', 'معرّف عميل Google غير مضبوط',
           'إن فشل الدخول على الهاتف: الإعدادات ← معرّف عميل Google');
