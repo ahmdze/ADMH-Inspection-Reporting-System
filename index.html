@@ -383,14 +383,6 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
               <label for="f_bookNumber">رقم الكتاب / الأمر الإداري</label>
               <input type="text" id="f_bookNumber" placeholder="اختياري">
             </div>
-            <div class="f">
-              <label for="f_population">عدد النفوس المسجلة</label>
-              <input type="number" id="f_population" min="0" inputmode="numeric">
-            </div>
-            <div class="f">
-              <label for="f_families">عدد العوائل المسجلة</label>
-              <input type="number" id="f_families" min="0" inputmode="numeric">
-            </div>
             <div class="f wide">
               <label>محتوى التقرير</label>
               <div class="picker" id="scopePicker">
@@ -421,6 +413,7 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 <datalist id="dlJobs"></datalist>
 <datalist id="dlSectors"></datalist>
 <datalist id="dlFacilities"></datalist>
+<datalist id="dlSources"></datalist>
 
         <!-- 3 staff -->
         <div class="card">
@@ -430,6 +423,16 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             <thead><tr><th style="width:52%">الفئة</th><th>الملاك الكلي</th><th>الملاك الفعلي</th></tr></thead>
             <tbody></tbody>
           </table></div>
+          <div class="grid" style="margin-top:12px">
+            <div class="f">
+              <label for="f_population">عدد النفوس المسجلة</label>
+              <input type="number" id="f_population" min="0" inputmode="numeric">
+            </div>
+            <div class="f">
+              <label for="f_families">عدد العوائل المسجلة</label>
+              <input type="number" id="f_families" min="0" inputmode="numeric">
+            </div>
+          </div>
         </div>
 
         <!-- 4 fingerprint -->
@@ -822,6 +825,21 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 <div id="toasts"></div>
 
 <!-- command palette -->
+<div class="modal" id="newModal"><div class="sheet" style="max-width:560px">
+  <button class="x" data-close>&times;</button>
+  <h3>إنشاء تقرير جديد</h3>
+  <p class="hint" id="newModalHint">ستُفتح نافذة إدخال فارغة. ماذا تريد أن تفعل بالتقرير الحالي؟</p>
+  <div class="btnrow" style="margin-top:14px">
+    <button class="btn ok" id="newSave">💾 احفظ الحالي في الأرشيف ثم ابدأ جديداً</button>
+  </div>
+  <div class="btnrow">
+    <button class="btn info" id="newDiscard">🆕 ابدأ جديداً بلا حفظ</button>
+  </div>
+  <div class="btnrow">
+    <button class="btn ghost" data-close>إلغاء</button>
+  </div>
+</div></div>
+
 <div class="modal" id="palModal"><div class="sheet" style="max-width:520px">
   <button class="x" data-close>&times;</button>
   <h3>لوحة الأوامر</h3>

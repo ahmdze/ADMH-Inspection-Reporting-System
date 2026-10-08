@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '7.1.0';
+const APP_VERSION = '8.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -362,14 +362,15 @@ function blankReport() {
       'إداريين': { total: '', actual: '' },
     },
     fp: { managerJob: '', managerName: '', deputyJob: '', deputyName: '', devices: '', deviceState: '', staff: '', adminCount: '', adminWhere: '', reportFreq: '', reportTo: '', notes: '' },
-    procedures: [{ date: todayISO(), kind: 'سحب موقف', source: '', note: '' }],
+    /* نافذة فارغة تماماً: لا صفوف مُنشأة مسبقاً — يضيف المستخدم ما يحتاجه */
+    procedures: [],
     procExtra: '',
     general: [],
     positions: [],
     records: [],
     recGroups: [],
     prevRecs: [],
-    signers: [{ name: '', job: '', date: todayISO() }],
+    signers: [],
     footerNote: '',
   };
 }
@@ -476,7 +477,7 @@ function renderAll() {
     <td data-label="نوع التدقيق"><select data-k="kind">
       ${L.get('procedureKinds').map(k => `<option${d.kind === k ? ' selected' : ''}>${esc(k)}</option>`).join('')}
     </select></td>
-    <td data-label="جهة السحب / المصدر"><input type="text" data-k="source" placeholder="مثال: موظفي المركز" value="${esc(d.source || '')}"></td>
+    <td data-label="جهة السحب / المصدر"><input type="text" data-k="source" list="dlSources" placeholder="مثال: موظفي المركز" value="${esc(d.source || '')}"></td>
     <td data-label="ملاحظة إضافية"><input type="text" data-k="note" placeholder="اختياري" value="${esc(d.note || '')}"></td>`);
 
   /* التوصيات السابقة */
@@ -683,6 +684,8 @@ function fillDatalists() {
   fillDatalist('#dlJobs', 'jobTitles');
   fillDatalist('#dlRoles', 'officialRoles');
   fillDatalist('#dlDeviceState', 'deviceStates');
+  /* جهات السحب / المصادر في جدول الإجراءات — تُحرَّر من مكتبة العبارات */
+  fillDatalist('#dlSources', 'procedureSources');
 
   /* القوائم المنسدلة الثابتة — تُبنى من المكتبة أيضاً */
   const fk = $('#f_facilityKind');
@@ -732,7 +735,7 @@ function rerender(part) {
     <td data-label="نوع التدقيق"><select data-k="kind">
       ${L.get('procedureKinds').map(k => `<option${d.kind === k ? ' selected' : ''}>${esc(k)}</option>`).join('')}
     </select></td>
-    <td data-label="جهة السحب / المصدر"><input type="text" data-k="source" placeholder="مثال: موظفي المركز" value="${esc(d.source || '')}"></td>
+    <td data-label="جهة السحب / المصدر"><input type="text" data-k="source" list="dlSources" placeholder="مثال: موظفي المركز" value="${esc(d.source || '')}"></td>
     <td data-label="ملاحظة إضافية"><input type="text" data-k="note" placeholder="اختياري" value="${esc(d.note || '')}"></td>`);
   else if (part === 'prevRecs') renderRows('#tPrevRecs tbody', 'prevRecs', state.report.prevRecs, d => `
     <td class="num"></td>
@@ -1162,15 +1165,10 @@ function bindButtons() {
   bindOn('#btnPrint', () => { showView('preview'); setTimeout(() => ADMHReport.run('الطباعة', ADMHReport.printReport), 120); });
   bindOn('#btnSaveLocal', () => saveToArchive());
 
-  /* جديد */
-  bindOn('#btnNew', () => {
-    if (!confirm('إنشاء تقرير جديد؟ سيُحفظ الحالي في الأرشيف أولاً.')) return;
-    saveToArchive(true);
-    state.report = blankReport();
-    state.editingId = state.report.id;
-    renderAll(); applyScope(); saveDraft(); showView('report');
-    toast('تقرير جديد جاهز', 'ok');
-  });
+  /* جديد — نسأل عن التقرير الحالي ثم نفتح نافذة فارغة */
+  bindOn('#btnNew', () => openNewReport());
+  bindOn('#newSave', () => newReport(true));      /* احفظ الحالي ثم ابدأ جديداً */
+  bindOn('#newDiscard', () => newReport(false));  /* ابدأ جديداً بلا حفظ */
 
   /* الأرشيف */
   bindOn('#btnExportAll', exportArchiveJSON);
@@ -1370,6 +1368,7 @@ function verifyBindings() {
     'btnSyncNow', 'btnSyncSignOut', 'btnSyncGoogle', 'dot',
     'btnListsSaveDefault', 'btnListsExport', 'btnListsImport', 'btnListsResetAll',
     'btnCopy',
+  'newSave', 'newDiscard',
     'btnListAdd', 'btnListReset', 'listPicker',
     'bulkFillEmpty', 'bulkFillAll'];
   const missing = must.filter(id => {
@@ -1966,6 +1965,58 @@ function initTheme() {
   let saved = null;
   try { saved = localStorage.getItem(LS_THEME); } catch (e) {}
   applyTheme(saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+
+/* ---------------------------------------------------------------- تقرير جديد */
+/**
+ * يفتح نافذة السؤال: هل نحفظ التقرير الحالي في الأرشيف أم لا؟
+ * بعد الاختيار — حفظاً أو لا — تُفتح نافذة إدخال فارغة تماماً.
+ */
+function openNewReport() {
+  /* إن كان التقرير الحالي فارغاً تماماً فلا داعي للسؤال — نبدأ مباشرة */
+  const empty = !state.report.facilityName && !state.report.visitDate &&
+    !(state.report.procedures || []).length && !(state.report.records || []).length;
+  if (empty) { newReport(false); return; }
+
+  const facility = tidy(state.report.facilityName) || 'بلا اسم';
+  const hint = $('#newModalHint');
+  if (hint) {
+    hint.textContent = 'التقرير الحالي: ' + facility +
+      (fmtDate(state.report.visitDate) ? ' — بتاريخ ' + fmtDate(state.report.visitDate) : '') +
+      '. ماذا تريد أن تفعل به قبل فتح النافذة الجديدة؟';
+  }
+  openModal('#newModal');
+}
+
+/**
+ * ينشئ تقريراً جديداً فارغاً.
+ * @param {boolean} saveFirst هل نحفظ التقرير الحالي في الأرشيف أولاً؟
+ */
+function newReport(saveFirst) {
+  closeModal($('#newModal'));
+
+  if (saveFirst) {
+    saveToArchive(true);            /* صامت: لا نُكرر الإشعار */
+  } else {
+    /* لم نحفظ: نُبقي نسخة في المسودة حتى لا يضيع العمل بالخطأ */
+    saveDraft();
+  }
+
+  /* نافذة إدخال مصفّرة من كل شيء */
+  state.report = blankReport();
+  state.editingId = state.report.id;
+  renderAll();
+  applyScope();
+  saveDraft();
+  showView('report');
+
+  /* نُعيد التمرير إلى أعلى النموذج ليبدأ الإدخال من أول حقل */
+  const main = document.querySelector('.main');
+  if (main) main.scrollTop = 0;
+  const first = $('#f_facilityName');
+  if (first) setTimeout(() => { try { first.focus(); } catch (e) {} }, 80);
+
+  toast(saveFirst ? 'حُفظ التقرير السابق في الأرشيف — نافذة جديدة جاهزة' : 'نافذة جديدة جاهزة — التقرير السابق محفوظ كمسودة', 'ok', 3200);
 }
 
 /* ---------------------------------------------------------------- النوافذ */

@@ -22,7 +22,7 @@ window.ADMHReport = window.ADMHReport || {};
   const fmtNum = n => window.ADMHReport.util.fmtNum(n);              /* رقم نظيف للعرض في Word */
   const normalizeDigits = v => window.ADMHReport.util.normalizeDigits(v); /* توحيد الأرقام العربية */
   const autoTitle = r => window.ADMHReport.util.autoTitle(r);        /* توليد عنوان التقرير تلقائياً */
-  const titleName = r => window.ADMHReport.util.titleName(r);        /* اسم التقرير المختصر */
+  const titleName = (job, name) => window.ADMHReport.util.titleName(job, name); /* «العنوان الوظيفي – الاسم» */
   const positionCats = () => window.ADMHReport.util.positionCats();  /* فئات المواقف الخمس */
   const state = () => window.ADMHReport.getState();                  /* حالة التطبيق: التقرير والإعدادات */
   /* =========================================================================
@@ -60,8 +60,6 @@ function buildModel() {
   if (r.bookNumber) M.meta.push(['رقم الكتاب / الأمر الإداري', t(r.bookNumber)]);
   if (sec) M.meta.push(['الجهة التابعة', sec]);
   if (dstr) M.meta.push(['تاريخ الزيارة', day ? `${day} الموافق ${dstr}` : dstr]);
-  if (r.population) M.meta.push(['عدد النفوس المسجلة', normalizeDigits(r.population)]);
-  if (r.families) M.meta.push(['عدد العوائل المسجلة', normalizeDigits(r.families)]);
 
   /* المقدمة */
   M.intro = `استناداً إلى الخطة السنوية لشعبة تفتيش المؤسسات الصحية الحكومية، أجرى فريق من قسم التفتيش / شعبة تفتيش المؤسسات الصحية الحكومية ${t(r.visitType) || 'زيارة تفتيشية'} إلى ${kind} ${fac}${sec ? ' التابع إلى ' + sec : ''}${dstr ? ' بتاريخ ' + dstr : ''}، وتم ملاحظة الآتي:`;
@@ -70,7 +68,8 @@ function buildModel() {
   const offs = (r.officials || []).map(o => [t(o.role), titleName(o.job, o.name)]).filter(o => o[1]);
   if (offs.length) M.sections.push({ type: 'kv', heading: 'بيانات المؤسسة', rows: offs });
 
-  /* الملاك — فقرات لا جدول، بلا حساب نقص أو نسبة (بطلب صريح) */
+  /* الملاك — فقرات لا جدول، بلا حساب نقص أو نسبة (بطلب صريح)
+     ثم حقلا النفوس والعوائل في نهاية القسم نفسه (بطلب صريح) */
   const staffRows = Object.keys(r.staff || {}).map(k => {
     const v = r.staff[k];
     const tot = normalizeDigits(v.total).trim();
@@ -78,6 +77,9 @@ function buildModel() {
     if (!tot && !act) return null;
     return `${t(k)}: الملاك الكلي ${fmtNum(tot)} — الملاك الفعلي ${fmtNum(act)}`;
   }).filter(Boolean);
+  /* النفوس والعوائل: سطران مستقلان أسفل فقرات الملاك */
+  if (t(r.population)) staffRows.push(`عدد النفوس المسجلة: ${normalizeDigits(r.population)}`);
+  if (t(r.families)) staffRows.push(`عدد العوائل المسجلة: ${normalizeDigits(r.families)}`);
   if (staffRows.length) M.sections.push({ type: 'list', heading: 'الملاك الكلي والفعلي', items: staffRows, numbered: false });
 
   /* أولاً: وحدة البصمة */
