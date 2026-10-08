@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head><meta charset="UTF-8"><title>probe</title></head>
+<body>
+<pre id="out">RUNNING</pre>
+<iframe id="fr" src="../index.html" style="width:1150px;height:900px"></iframe>
+<script>
+const out = document.getElementById('out');
+const errors = [];
+const warns = [];
+const L = [];
+function say(s) { L.push(s); out.textContent = L.join('\n'); }
+
+const fr = document.getElementById('fr');
+let tries = 0;
+
+function probe() {
+  tries++;
+  let w, d;
+  try { w = fr.contentWindow; d = fr.contentDocument; } catch (e) { say('CROSS-ORIGIN: ' + e.message); return; }
+  if (!w || !d) { if (tries < 60) return setTimeout(probe, 100); say('NO WINDOW'); return; }
+  if (!w.ADMH) { if (tries < 60) return setTimeout(probe, 100); say('ADMH NEVER LOADED after ' + tries + ' tries'); return; }
+
+  /* hook error collection as early as we can */
+  w.addEventListener('error', e => errors.push('onerror: ' + e.message + ' @' + e.lineno + ':' + e.colno));
+  if (!w.__hooked) {
+    w.__hooked = true;
+    const ce = w.console.error.bind(w.console);
+    w.console.error = (...a) => { errors.push('console.error: ' + a.map(x => String(x && x.message || x)).join(' ')); ce(...a); };
+    const cw = w.console.warn.bind(w.console);
+    w.console.warn = (...a) => { warns.push(a.map(x => String(x && x.message || x)).join(' ')); cw(...a); };
+  }
+
+  setTimeout(runChecks, 900);
+}
+
+function runChecks() {
+  const w = fr.contentWindow, d = fr.contentDocument, A = w.ADMH;
+  say('=== loaded ===');
+  say('ADMH=' + !!A + '  version=' + (A ? A.APP_VERSION : '?') + '  ADMHSync=' + !!w.ADMHSync);
+  say('protocol=' + w.location.protocol);
+
+  say('');
+  say('=== startup errors ===');
+  say(errors.length ? errors.map(e => '  !! ' + e).join('\n') : '  none');
+
+  say('');
+  say('=== force re-run bindButtons to expose the crash ===');
+  try {
+    if (typeof A.bindButtons === 'function') { A.bindButtons(); say('  bindButtons() ran WITHOUT throwing'); }
+    else if (A.__bindButtons) { A.__bindButtons(); say('  __bindButtons() ran WITHOUT throwing'); }
+    else {
+      /* not exported: reconstruct the crash by probing each assignment target */
+      const targets = ['btnSettingsSave','s_logo','btnLogoDel','btnWipe','libKind','btnLibAdd',
+                       'btnSyncConnect','btnSyncNow','btnSyncSignOut',
+                       'btnSyncConnect','dot','palBtn','themeBtn','hamb','helpBtn','btnWord','btnWord2',
+                       'btnPreviewGo','btnPrint','btnSaveLocal','btnNew','btnExportAll','btnExportAll2',
+                       'btnImport','btnImport2','btnStdOfficials','btnAllRecords',
+                       'btnBulkRecords','btnStdRecs','bulkFillEmpty','bulkFillAll','libFilter','palInput'];
+      const missing = targets.filter(id => !d.getElementById(id));
+      say('  A.bindButtons not exported; missing elements: ' + (missing.length ? missing.join(', ') : 'NONE'));
+    }
+  } catch (e) { say('  CRASH: ' + e.message + '\n' + (e.stack||'').split('\n').slice(0,4).join('\n')); }
+
+  say('');
+  say('=== handler binding ===');
+  const ids = ['palBtn','themeBtn','helpBtn','btnWord','btnPreviewGo','btnNew','btnSaveLocal',
+               'btnWord2','btnPrint','hamb','btnStdOfficials','btnAllRecords',
+               'btnBulkRecords','btnStdRecs','btnSyncConnect','btnExportAll','btnImport','btnWipe',
+               'btnExportAll2','btnImport2','btnSettingsSave','btnLibAdd','btnSyncNow','btnSyncSignOut',
+               'btnLogoDel','btnRemoveLogo'];
+  const unbound = [];
+  ids.forEach(id => {
+    const el = d.getElementById(id);
+    if (!el) { unbound.push(id + ':MISSING'); return; }
+    if (typeof el.onclick !== 'function') unbound.push(id + ':null');
+  });
+  say('  bound ' + (ids.length - unbound.length) + '/' + ids.length);
+  if (unbound.length) say('  UNBOUND -> ' + unbound.join(', '));
+
+  say('');
+  say('=== bug 3: add standard officials ===');
+  try {
+    const before = d.querySelectorAll('#tOfficials tbody tr').length;
+    d.getElementById('btnStdOfficials').click();
+    const after = d.querySelectorAll('#tOfficials tbody tr').length;
+    const roles = [...d.querySelectorAll('#tOfficials tbody [data-k="role"]')];
+    const jobs  = [...d.querySelectorAll('#tOfficials tbody [data-k="job"]')];
+    const names = [...d.querySelectorAll('#tOfficials tbody [data-k="name"]')];
+    say('  rows ' + before + ' -> ' + after);
+    say('  inputs role/job/name = ' + roles.length + '/' + jobs.length + '/' + names.length);
+    say('  filled rows: ' + roles.filter((r,i) => r.value || jobs[i].value || names[i].value).length);
+    say('  role values: ' + JSON.stringify(roles.map(r => r.value)));
+    say('  role list attr: ' + JSON.stringify(roles.map(r => r.getAttribute('list'))));
+    say('  #dlRoles exists: ' + !!d.getElementById('dlRoles'));
+    say('  #dlJobs exists: ' + !!d.getElementById('dlJobs'));
+  } catch (e) { say('  ERROR ' + e.message); }
+
+  say('');
+  say('=== bug 4: staff categories ===');
+  try {
+    say('  rows: ' + JSON.stringify([...d.querySelectorAll('#tStaff tbody tr')].map(tr => tr.dataset.k)));
+  } catch (e) { say('  ERROR ' + e.message); }
+
+  say('');
+  say('=== bug 8: add procedure ===');
+  try {
+    const b4 = d.querySelectorAll('#tProcs tbody tr').length;
+    d.querySelector('[data-add="procs"]').click();
+    const a4 = d.querySelectorAll('#tProcs tbody tr').length;
+    say('  rows ' + b4 + ' -> ' + a4 + '  ' + (a4 > b4 ? 'WORKS' : 'BROKEN'));
+  } catch (e) { say('  ERROR ' + e.message); }
+
+  say('');
+  say('=== bug 11: theme + palette + views ===');
+  try {
+    const b = d.body.classList.contains('dark');
+    d.getElementById('themeBtn').click();
+    say('  theme toggle: ' + (b !== d.body.classList.contains('dark')));
+    d.getElementById('themeBtn').click();
+  } catch (e) { say('  theme ERROR ' + e.message); }
+  try {
+    d.getElementById('palBtn').click();
+    say('  palette open: ' + d.getElementById('palModal').classList.contains('open'));
+    d.querySelector('#palModal [data-close]').click();
+    say('  palette closed: ' + !d.getElementById('palModal').classList.contains('open'));
+  } catch (e) { say('  palette ERROR ' + e.message); }
+  try {
+    d.getElementById('helpBtn').click();
+    say('  help view: ' + !d.getElementById('view-help').classList.contains('hidden'));
+    d.querySelector('#nav button[data-go="report"]').click();
+  } catch (e) { say('  help ERROR ' + e.message); }
+
+  say('');
+  say('=== bug 12: library renders on select ===');
+  try {
+    d.querySelector('#nav button[data-go="library"]').click();
+    const n0 = d.querySelectorAll('#libList [data-libdel]').length;
+    const sel = d.getElementById('libKind');
+    sel.value = 'reco';
+    sel.dispatchEvent(new w.Event('change', { bubbles: true }));
+    const n1 = d.querySelectorAll('#libList [data-libdel]').length;
+    say('  lib items records=' + n0 + ' reco=' + n1 + '  ' + (n1 > 0 ? 'OK' : 'EMPTY'));
+  } catch (e) { say('  library ERROR ' + e.message); }
+
+  say('');
+  say('=== bug: hamburger visible at narrow width ===');
+  try {
+    const h = d.getElementById('hamb');
+    say('  hamb display = ' + w.getComputedStyle(h).display + ' (window ' + w.innerWidth + 'px)');
+  } catch (e) { say('  ERROR ' + e.message); }
+
+  say('');
+  say('=== bug 10: record multi-select + manual eval ===');
+  try {
+    d.querySelector('#nav button[data-go="report"]').click();
+    d.getElementById('btnAllRecords').click();
+    const chips = d.querySelectorAll('#tRecords [data-pick]');
+    say('  preset chips rendered: ' + chips.length);
+    if (chips.length >= 2) {
+      chips[0].click();
+      const after1 = d.querySelectorAll('#tRecords [data-pick].ok').length;
+      chips[1].click();
+      const after2 = d.querySelectorAll('#tRecords [data-pick].ok').length;
+      say('  selected count ' + after1 + ' -> ' + after2 + '  ' + (after2 > after1 ? 'MULTI OK' : 'BROKEN'));
+      chips[0].click();
+      say('  deselect works: ' + (d.querySelectorAll('#tRecords [data-pick].ok').length === after2 - 1));
+    }
+    const recs = A.state.report.records;
+    const filled = recs.filter(x => x.eval && x.eval.length).length;
+    say('  records with computed eval: ' + filled);
+  } catch (e) { say('  records ERROR ' + e.message); }
+
+  say('');
+  say('=== console warnings ===');
+  say(warns.length ? warns.slice(0, 8).map(x => '  ' + x).join('\n') : '  none');
+
+  say('');
+  say('=== DONE ===');
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(probe, 50));
+else setTimeout(probe, 50);
+</script>
+</body>
+</html>
