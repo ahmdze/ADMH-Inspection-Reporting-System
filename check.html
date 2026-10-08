@@ -143,6 +143,41 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
 
   line('#envChecks', 'ok', 'مولّد ملفات Word', window.docx ? 'مكتبة docx محمّلة' : 'لم تُحمَّل في هذه الصفحة (طبيعي)');
 
+  /* ---------------------------------------------------------------------
+     هل النسخة المنشورة حديثة؟
+     كانت النسخة القديمة تُخدَم من ذاكرة المتصفح أو عامل الخدمة، فتظهر أخطاء
+     قد انتهت. هذا الفحص يكشف ذلك فوراً.
+     --------------------------------------------------------------------- */
+  try {
+    const need = ['report-model.js', 'report-preview.js', 'report-clipboard.js',
+                  'report-word.js', 'report-print.js'];
+    fetch('app.js', { cache: 'no-store' }).then(r => r.text()).then(t => {
+      const v = (/APP_VERSION\s*=\s*'([^']+)'/.exec(t) || [])[1] || '؟';
+      if (v === '7.1.0') {
+        line('#envChecks', 'ok', 'نسخة النظام', v + ' — حديثة');
+      } else {
+        warnings++;
+        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 7.1.0 — حدّث الموقع وامسح ذاكرة المتصفح');
+      }
+    }).catch(() => {});
+
+    let loaded = 0;
+    need.forEach(f => {
+      fetch(f, { cache: 'no-store', method: 'HEAD' })
+        .then(r => { if (r.ok) loaded++; })
+        .catch(() => {});
+    });
+    /* نتحقق أن ملفات منطق التقرير منشورة فعلاً */
+    fetch('report-clipboard.js', { cache: 'no-store' })
+      .then(r => {
+        if (!r.ok) {
+          failures++;
+          line('#envChecks', 'bad', 'ملفات منطق التقرير غير منشورة',
+            'report-clipboard.js غير موجود على الموقع — ارفع الملفات الجديدة');
+        }
+      }).catch(() => {});
+  } catch (e) {}
+
   /* النطاق — أهم معلومة لإعداد Firebase */
   if (location.hostname) {
     line('#envChecks', 'ok', 'النطاق الحالي' +

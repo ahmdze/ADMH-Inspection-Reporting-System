@@ -251,6 +251,7 @@
       const provider = googleProvider();
       setState({ busy: true, error: '', errorCode: '' });
 
+      /* خطة بديلة: إعادة توجيه كاملة للصفحة */
       const goRedirect = () => {
         if (!fb.auth.signInWithRedirect) {
           const e = new Error('هذا المتصفح لا يدعم إعادة التوجيه. افتح الموقع في Chrome.');
@@ -265,20 +266,41 @@
         });
       };
 
-      /* المنبثقة أولاً */
-      return fb.auth.signInWithPopup(provider).catch(err => {
+      /* -----------------------------------------------------------------
+         المنبثقة أولاً.
+         نقطة مهمة: أحياناً يُغلق المستخدم النافذة *بعد* نجاح الدخول، فيصل
+         الوعد مرفوضاً بـ popup-closed-by-user بينما الجلسة محفوظة فعلاً.
+         لذلك لا نُصدّق الفشل قبل أن نتحقق من الجلسة.
+         ----------------------------------------------------------------- */
+      return fb.auth.signInWithPopup(provider).then(cred => {
+        if (cred && cred.user) return cred;
+        /* الوعد نجح بلا مستخدم: ننتظر الجلسة */
+        return waitForSession(3000).then(u => {
+          if (u) return { user: u };
+          const e = new Error('لم تظهر جلسة الدخول بعد إغلاق النافذة. أعد المحاولة.');
+          e.code = 'auth/no-session-after-popup';
+          throw e;
+        });
+      }).catch(err => {
         const code = (err && err.code) || '';
-        /* «أغلق المستخدم النافذة» ليس سبباً للتوجيه القسري */
-        if (code === 'auth/popup-closed-by-user' && !redirectPreferred) throw err;
-        const fallbackable =
-          code === 'auth/popup-blocked' ||
-          code === 'auth/popup-closed-by-user' ||
-          code === 'auth/cancelled-popup-request' ||
-          code === 'auth/operation-not-supported-in-this-environment' ||
-          code === 'auth/web-storage-unsupported' ||
-          code === 'auth/internal-error';
-        if (fallbackable && fb.auth.signInWithRedirect) return goRedirect();
-        throw err;
+
+        /* هل نجح الدخول فعلاً رغم رسالة الفشل؟ (نافذة أُغلقت بعد النجاح) */
+        const recover = () => waitForSession(2500).then(u => (u ? { user: u } : null));
+
+        return recover().then(found => {
+          if (found) return found;                       /* الدخول ناجح فعلاً */
+
+          /* فشل حقيقي: نجرّب إعادة التوجيه إن كانت مجدية */
+          const fallbackable =
+            code === 'auth/popup-blocked' ||
+            code === 'auth/popup-closed-by-user' ||
+            code === 'auth/cancelled-popup-request' ||
+            code === 'auth/operation-not-supported-in-this-environment' ||
+            code === 'auth/web-storage-unsupported' ||
+            code === 'auth/internal-error';
+          if (fallbackable && fb.auth.signInWithRedirect) return goRedirect();
+          throw err;
+        });
       });
     });
   }
@@ -588,7 +610,7 @@
       return 'البريد أو كلمة المرور غير صحيحة. إن كنت أنشأت الحساب بحساب Google فاستخدم زر «الدخول بحساب Google»، أو أرسل رابط إعادة تعيين كلمة المرور.';
     }
     if (code === 'auth/internal-error' || /internal-error/i.test(msg)) {
-      return 'خطأ داخلي من Firebase. أسبابه الشائعة: نافذة الدخول فُتحت داخل تطبيق مضمّن أو متصفح داخلي. افتح الموقع في Chrome أو Safari مباشرةً، أو استخدم زر الدخول بحساب Google (يُعيد التوجيه تلقائياً على الهاتف).';
+      return 'خطأ داخلي من Firebase. الأسباب الشائعة: النافذة فُتحت داخل تطبيق مضمّن (فيسبوك أو إنستغرام أو واتساب) أو نافذة تصفّح خاص. افتح الموقع في Chrome مباشرةً وأعد المحاولة — وإن كنت داخل التطبيق المثبَّت فافتح الموقع في Chrome مرة واحدة وسجّل الدخول، ثم افتح التطبيق وستجد الجلسة محفوظة.';
     }
     if (code === 'auth/operation-not-supported-in-this-environment') {
       return 'هذه البيئة لا تدعم نوافذ الدخول المنبثقة. افتح الموقع في متصفح كامل (Chrome أو Safari) خارج أي تطبيق مضمّن.';
