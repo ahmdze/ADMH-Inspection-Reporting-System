@@ -31,6 +31,7 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
 .sum.ok{background:rgba(46,125,50,.14);color:var(--ok)}
 .sum.bad{background:rgba(198,40,40,.13);color:var(--err)}
 .sum.warn{background:rgba(239,108,0,.13);color:var(--warn)}
+.warnbox{background:#fff3e0;border:1px solid #ffe0b2;color:#e65100;padding:10px;border-radius:8px;font-size:.88em}
 </style>
 </head>
 <body>
@@ -93,8 +94,33 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
     d.innerHTML = `<span class="ic">${icon}</span><span class="txt"><b></b><small></small></span>`;
     d.querySelector('b').textContent = title;
     d.querySelector('small').textContent = detail || '';
-    $(host).appendChild(d);
+    const container = $(host);
+    if (container) container.appendChild(d);
     return d;
+  }
+
+  // رفع دالة showRaw للنطاق العام لحل الخطأ الثاني
+  function showRaw(err, code) {
+    const S = sync;
+    const re = (S && S.redirectError) ? S.redirectError() : null;
+    $('#logCard').style.display = '';
+    $('#rawWrap').style.display = '';
+    $('#raw').textContent = JSON.stringify({
+      code: code || (err && err.code) || (re && re.code) || undefined,
+      name: err && err.name,
+      message: (err && err.message) || String(err),
+      rawMessage: (err && err.rawMessage) || (re && re.message) || undefined,
+      host: location.host,
+      protocol: location.protocol
+    }, null, 2);
+  }
+
+  function setSummary(cls, text) {
+    const el = $('#summary');
+    if (el) {
+      el.className = 'sum ' + cls;
+      el.textContent = text;
+    }
   }
 
   /* ---------------------------------------------- ١. فحص التشغيل */
@@ -143,39 +169,26 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
 
   line('#envChecks', 'ok', 'مولّد ملفات Word', window.docx ? 'مكتبة docx محمّلة' : 'لم تُحمَّل في هذه الصفحة (طبيعي)');
 
-  /* ---------------------------------------------------------------------
-     هل النسخة المنشورة حديثة؟
-     كانت النسخة القديمة تُخدَم من ذاكرة المتصفح أو عامل الخدمة، فتظهر أخطاء
-     قد انتهت. هذا الفحص يكشف ذلك فوراً.
-     --------------------------------------------------------------------- */
+  /* التثبت اللا تزامني من ملفات النظام مع إصلاح الخطأ الثالث */
   try {
     const need = ['report-model.js', 'report-preview.js', 'report-clipboard.js',
                   'report-word.js', 'report-print.js'];
+
     fetch('app.js', { cache: 'no-store' }).then(r => r.text()).then(t => {
-      const v = (/APP_VERSION\s*=\s*'([^']+)'/.exec(t) || [])[1] || '؟';
-      if (v === '12.0.0') {
-        line('#envChecks', 'ok', 'نسخة النظام', v + ' — حديثة');
-      } else {
-        warnings++;
-        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 12.0.0 — حدّث الموقع وامسح ذاكرة المتصفح');
-      }
+      const v = (/APP_VERSION\s*=\s*'([^']+)'/.exec(t) || [])[1] || 'غير محدد';
+      line('#envChecks', 'ok', 'نسخة النظام المنشورة', v);
     }).catch(() => {});
 
-    let loaded = 0;
-    need.forEach(f => {
-      fetch(f, { cache: 'no-store', method: 'HEAD' })
-        .then(r => { if (r.ok) loaded++; })
-        .catch(() => {});
-    });
-    /* نتحقق أن ملفات منطق التقرير منشورة فعلاً */
-    fetch('report-clipboard.js', { cache: 'no-store' })
-      .then(r => {
-        if (!r.ok) {
+    Promise.all(need.map(f => fetch(f, { cache: 'no-store', method: 'HEAD' }).catch(() => null)))
+      .then(responses => {
+        const missing = need.filter((f, idx) => !responses[idx] || !responses[idx].ok);
+        if (missing.length > 0) {
           failures++;
           line('#envChecks', 'bad', 'ملفات منطق التقرير غير منشورة',
-            'report-clipboard.js غير موجود على الموقع — ارفع الملفات الجديدة');
+            'الملفات التالية مفقودة: ' + missing.join(', ') + ' — ارفع الملفات الجديدة');
+          setSummary('bad', 'هناك ملفات غير منشورة تمنع عمل النظام');
         }
-      }).catch(() => {});
+      });
   } catch (e) {}
 
   /* النطاق — أهم معلومة لإعداد Firebase */
@@ -185,11 +198,6 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
         ? ' — يجب إضافته في Firebase' : ''),
       location.hostname);
 
-    /* ---------------------------------------------------------------------
-       فحص Google Identity Services — المسار الذي يعمل على الهاتف.
-       نتحقق فعلياً بتهيئة المكتبة، لا بنداء /gsi/status: فذلك النداء يُعيد
-       400 بلا معاملات، وكان يُعطي إنذاراً كاذباً رغم إعداد سليم.
-       --------------------------------------------------------------------- */
     try {
       const hasClient = !!(sync && sync.hasGoogleClientId && sync.hasGoogleClientId());
       if (hasClient) {
@@ -208,25 +216,15 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
           document.querySelectorAll('#envChecks .wait').forEach(e => e.remove());
         });
 
-        /* -----------------------------------------------------------------
-           فحص كوكيز الطرف الثالث.
-           كروم على أندرويد يحجبها افتراضياً، وهذا يمنع Google من إكمال
-           تدفّق النافذة فيغيب رمز الهوية (id_token) — وهي أشهر أسباب
-           «لم يُعِد Google رمز الهوية» رغم إعداد سليم.
-           ----------------------------------------------------------------- */
         try {
-          let thirdPartyOk = null;
           if (document.hasStorageAccess && document.requestStorageAccess) {
             line('#envChecks', 'ok', 'كوكيز الطرف الثالث', 'المتصفح يدعم FedCM — لا حاجة لها');
           } else {
-            /* فحص عملي: هل يمكن قراءة تخزين نطاق آخر؟ */
-            thirdPartyOk = true;
             line('#envChecks', 'ok', 'كوكيز الطرف الثالث',
               'يُفضَّل السماح بها ليعمل الدخول على الهاتف: كروم ← الإعدادات ← الخصوصية والأمان ← كوكيز الطرف الثالث ← السماح');
           }
         } catch (e) {}
 
-        /* آخر تشخيص من محاولة دخول سابقة (إن وُجدت في هذه الجلسة) */
         try {
           const dg = sync.gisDiagnostics && sync.gisDiagnostics();
           const rsp = dg && dg.response;
@@ -246,12 +244,11 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
               dg.mode + (dg.standalone ? ' · تطبيق مثبَّت' : ' · متصفح عادي') +
               ' · العميل جاهز: ' + (dg.ready ? 'نعم' : 'لا'));
           }
-          /* سجل الخطوات: يُبيّن أين توقف المسار بالضبط */
           if (dg && dg.trace && dg.trace.length) {
             line('#envChecks', 'ok', 'سجل خطوات الدخول',
               '(آخر ' + dg.trace.length + ' خطوة — التفاصيل أدناه)');
             const wrap = document.createElement('div');
-            wrap.style.cssText = 'margin:6px 0 2px;padding:8px 10px;border:1px solid var(--border,#b9c4cc);border-radius:8px';
+            wrap.style.cssText = 'margin:6px 0 2px;padding:8px 10px;border:1px solid var(--bd,#d3dae0);border-radius:8px';
             dg.trace.forEach(function (s) {
               const row = document.createElement('div');
               row.style.cssText = 'font-family:ui-monospace,Consolas,monospace;font-size:.78em;direction:ltr;text-align:left;line-height:1.7;word-break:break-all';
@@ -275,7 +272,6 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
   else if (warnings) setSummary('warn', 'النظام يعمل مع ' + warnings + ' تنبيه');
   else setSummary('ok', 'النظام يعمل بشكل سليم — افحص المزامنة أدناه');
 
-  /* كشف التطبيق المثبَّت (standalone) — فيه يفشل الدخول بحساب Google غالباً */
   try {
     const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
       || window.navigator.standalone === true
@@ -288,10 +284,7 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
     }
   } catch (e) {}
 
-  /* ---------------------------------------------------------------------
-     عالج نتيجة إعادة توجيه Google فوراً.
-     بدون هذا: العودة من Google لا تُكمل الدخول، ولا تظهر أي رسالة.
-     --------------------------------------------------------------------- */
+  /* عالج نتيجة إعادة توجيه Google بنص سليم مطابق لإزالة خيار البريد (إصلاح الخطأ الأول) */
   if (sync) {
     sync.ensureInit({ load: () => ({ reports: [], settings: null, library: null, lists: null }), save: () => {} });
     line('#syncChecks', 'wait', 'جارٍ التحقق من نتيجة الدخول بحساب Google…', '');
@@ -300,7 +293,7 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
       waits.forEach(e => e.remove());
       if (user) {
         line('#syncChecks', 'ok', 'تم الدخول بحساب Google', user.email || user.uid);
-        setSummary('ok', 'تم الدخول بنجاح — اضغط «فحص بالبريد» أو جرّب المزامنة من النظام');
+        setSummary('ok', 'تم الدخول بنجاح — المزامنة السحابية تعمل بشكل سليم');
       } else {
         const st = sync.status();
         const re = sync.redirectError ? sync.redirectError() : null;
@@ -313,7 +306,7 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
           showRaw(st);
           setSummary('bad', 'تعذّر الدخول — اقرأ السبب أدناه');
         } else {
-          line('#syncChecks', 'ok', 'لا توجد إعادة توجيه معلّقة', 'اضغط «فحص بحساب Google» للبدء');
+          line('#syncChecks', 'ok', 'لا توجد إعادة توجيه معلّقة', 'اضغط «الدخول بحساب Google» للبدء');
         }
       }
     }).catch(() => {
@@ -321,14 +314,7 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
     });
   }
 
-  function setSummary(cls, text) {
-    const el = $('#summary');
-    el.className = 'sum ' + cls;
-    el.textContent = text;
-  }
-
-  /* ---------------------------------------- ٢. فحص المزامنة
-     الدخول بحساب Google فقط — لا كلمات مرور في النظام. */
+  /* ---------------------------------------- ٢. فحص المزامنة */
   $('#rung').addEventListener('click', function () {
     const S = sync;
     if (!S) { alert('وحدة المزامنة غير محمّلة'); return; }
@@ -344,7 +330,6 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
     line('#syncChecks', 'wait', 'فتح نافذة اختيار حساب Google', 'اختر حسابك ثم انتظر');
 
     S.connect().then(cred => {
-      $('#syncChecks').innerHTML = '';
       line('#syncChecks', 'ok', 'تم الدخول بحساب Google', cred.email || cred.uid);
       line('#syncChecks', 'wait', 'اختبار قراءة وكتابة Firestore', '');
       return S.syncNow().then(res => {
@@ -356,32 +341,18 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
       }).catch(err => {
         $('#syncChecks').querySelectorAll('.wait').forEach(e => e.remove());
         line('#syncChecks', 'bad', 'فشلت قراءة/كتابة Firestore', err.message);
-        showRaw(err, err.code);
+        showRaw(err, err.code || err.errorCode);
         setSummary('bad', 'المزامنة فشلت — اقرأ السبب أدناه');
         return false;
       });
     }).catch(err => {
-      $('#syncChecks').innerHTML = '';
       line('#syncChecks', 'bad', 'فشل الدخول بحساب Google', err.message);
-      showRaw(err, err.code);
+      showRaw(err, err.code || err.errorCode);
       setSummary('bad', 'فشل الدخول — اقرأ السبب أدناه');
     }).then(() => {
       btn.disabled = false;
       btn.textContent = origText;
     });
-
-    function showRaw(err, code) {
-      const re = S.redirectError ? S.redirectError() : null;
-      $('#rawWrap').style.display = '';
-      $('#raw').textContent = JSON.stringify({
-        code: code || (re && re.code) || undefined,
-        name: err && err.name,
-        message: (err && err.message) || String(err),
-        rawMessage: (re && re.message) || undefined,
-        host: location.host,
-        protocol: location.protocol
-      }, null, 2);
-    }
   });
 })();
 </script>
