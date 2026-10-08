@@ -197,6 +197,41 @@ git push -u origin main
 
 ---
 
+### إصلاح دخول الهاتف: Google Identity Services
+
+**المشكلة:** إعادة توجيه Firebase تعتمد على **تخزين الطرف الثالث** بين نطاقك و
+`firebaseapp.com`. وكروم على أندرويد **يحجب ذلك افتراضياً**، فتُكمل Google الدخول
+ويرجعك الموقع **بلا جلسة** — بلا أي رسالة. نفس السبب يمنع النافذة المنبثقة من العمل.
+
+**الحل (موصى به بشدة للهاتف):** استخدم **Google Identity Services**، وهو يعمل من نطاقك
+مباشرةً ويعيد رمز الهوية، ثم نحوّله إلى جلسة Firebase — **بلا تخزين طرف ثالث إطلاقاً**.
+
+#### خطوات الإعداد (مرة واحدة، ~٣ دقائق)
+
+1. افتح <https://console.cloud.google.com> واختر مشروع Firebase نفسه
+   (`admh-inspection-reporting-sys`).
+2. **APIs & Services** ← **OAuth consent screen** ← أكمله إن طُلب (External، ثم أضف
+   بريدك في **Test users** إن كان التطبيق في وضع الاختبار).
+3. **APIs & Services** ← **Credentials** ← **Create credentials** ← **OAuth client ID**.
+4. **Application type**: **Web application**.
+5. في **Authorized JavaScript origins** أضف نطاقك **بالبروتوكول وبلا مسار**:
+   ```
+   https://admh-inspection-reporting-system.ahmdze.workers.dev
+   ```
+6. اضغط **Create** وانسخ **Client ID** (ينتهي بـ `.apps.googleusercontent.com`).
+7. في التطبيق: **الإعدادات** ← **المزامنة السحابية** ← افتح **⚙️ معرّف عميل Google**
+   ← الصق المعرّف ← **حفظ المعرّف**.
+8. افتح `/check.html` وتأكد أن السطر يقول: **«معرّف عميل Google — مضبوط»**
+   و**«النطاق مسجَّل في Google Cloud»**.
+
+بعد ذلك يعمل الدخول على الهاتف والحاسوب. وإن فشل مسار Google Identity لأي سبب،
+ينتقل النظام **تلقائياً** إلى مسار Firebase المعتاد — فلا يتعطّل شيء.
+
+> **بدون هذا المعرّف** يبقى النظام على مسار Firebase، وهو يعمل على الحاسوب
+> لكنه قد يفشل على الهاتف بسبب حجب تخزين الطرف الثالث.
+
+---
+
 ## النسخ الاحتياطي
 
 البيانات في متصفح الجهاز. **حذف بيانات المتصفح = فقدان التقارير.**
@@ -321,7 +356,7 @@ _tools/               أدوات التطوير والاختبار (غير من�
 node _tools/edge.js                 # 30 اختباراً: أدوات مساعدة، سلامة المكتبة، حالات حدية
 node _tools/notables_test.js        # 21 اختباراً: النطاق، العنوان التلقائي، الفئات، خلوّ Word من الجداول
 node _tools/auth_test.js            # 39 اختباراً: الدخول بحساب Google، العودة من إعادة التوجيه
-node _tools/popup_test.js           # 20 اختباراً: استرجاع الجلسة بعد إغلاق نافذة Google
+node _tools/popup_test.js           # 39 اختباراً: استرجاع الجلسة + Google Identity Services
 node _tools/sync_test.js            # 31 اختباراً لمحرّك المزامنة بـ Firebase وهمي
 node _tools/app_sync_test.js        # 28 اختباراً لترابط الواجهة مع المزامنة
 node _tools/form_test.js            # 20 اختباراً للنموذج

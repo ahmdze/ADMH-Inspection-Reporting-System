@@ -19,6 +19,7 @@
   };
   const LS_CONF = 'admh.sync.config';
   const LS_LAST = 'admh.sync.last';
+  const LS_GCLIENT = 'admh.sync.gclient';   /* معرّف عميل Google لـ Identity Services */
 
   /* ---------------------------------------------------------------------------
      إعدادات Firebase مضمّنة في الكود — لا حاجة لإدخالها من الواجهة.
@@ -92,13 +93,148 @@
   }
 
   /** تحميل سكربت خارجي مرة واحدة */
-  function loadScript(src) {
+  function loadScript(src, onErr) {
     return new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.src = src; s.async = true;
       s.onload = resolve;
-      s.onerror = () => reject(new Error('تعذّر تحميل مكتبة Firebase — تحقق من الاتصال بالإنترنت'));
+      s.onerror = () => reject(new Error(onErr || 'تعذّر تحميل مكتبة Firebase — تحقق من الاتصال بالإنترنت'));
       document.head.appendChild(s);
+    });
+  }
+
+  /* ===========================================================================
+     Google Identity Services (GIS)
+     ---------------------------------------------------------------------------
+     لماذا؟ إعادة توجيه Firebase تعتمد على «تخزين الطرف الثالث» بين نطاقك و
+     firebaseapp.com، وكروم على أندرويد يحجب ذلك افتراضياً. النتيجة: تُكمل
+     Google الدخول لكن النتيجة لا تصل إلى موقعك أبداً — وهذا ما كان يحدث.
+
+     GIS يعمل من نطاقك نفسه ويعيد «رمز هوية» (ID token) مباشرةً، فنحوّله إلى
+     جلسة Firebase بـ signInWithCredential. لا تخزين طرف ثالث إطلاقاً.
+
+     يحتاج: Google OAuth Client ID (نوع Web) من Google Cloud Console،
+     مع إضافة نطاقك في Authorized JavaScript origins.
+     =========================================================================== */
+  const GIS_SRC = 'https://accounts.google.com/gsi/client';
+
+  /** معرّف عميل Google — مضمَّن أو محفوظ من الواجهة */
+  function googleClientId() {
+    const c = (cfg && cfg.googleClientId) || '';
+    if (c) return String(c).trim();
+    try { return String(localStorage.getItem(LS_GCLIENT) || '').trim(); } catch (e) { return ''; }
+  }
+  function setGoogleClientId(id) {
+    const v = String(id || '').trim();
+    if (!cfg) cfg = resolveConfig();
+    if (cfg) cfg.googleClientId = v;      /* في الذاكرة */
+    try { localStorage.setItem(LS_GCLIENT, v); } catch (e) {}
+    /* لا نستدعي saveConfig هنا: الإعدادات مضمّنة، وتمرير undefined يمسحها */
+    return v;
+  }
+  function hasGoogleClientId() { return !!googleClientId(); }
+
+  let gisPromise = null;
+  /** تحميل مكتبة Google Identity Services مرة واحدة */
+  function loadGis() {
+    if (global.google && global.google.accounts && global.google.accounts.oauth2) {
+      return Promise.resolve(global.google);
+    }
+    if (gisPromise) return gisPromise;
+    gisPromise = loadScript(GIS_SRC,
+      'تعذّر تحميل مكتبة الدخول من Google. تحقق من الاتصال، أو أن السياسة الأمنية تسمح بـ accounts.google.com')
+      .then(() => {
+        if (!global.google || !global.google.accounts || !global.google.accounts.oauth2) {
+          const e = new Error('مكتبة Google Identity لم تُهيَّأ بشكل صحيح.');
+          e.code = 'gis/not-ready';
+          throw e;
+        }
+        return global.google;
+      })
+      .catch(err => { gisPromise = null; throw err; });
+    return gisPromise;
+  }
+
+  /** هل النطاق مسجَّل في Google Cloud Console؟ (فحص استباقي مفيد) */
+  function gisDomainAllowed() {
+    return fetch('https://accounts.google.com/gsi/status', { method: 'GET', cache: 'no-store' })
+      .then(r => r.text())
+      .then(t => /"configured"\s*:\s*true/i.test(t) || /"allowed"\s*:\s*true/i.test(t))
+      .catch(() => true);               /* الفحص مساعد فقط — لا نمنع المحاولة */
+  }
+
+  /**
+   * الدخول عبر Google Identity Services.
+   * يُعيد وعداً بكائن اعتماد Firebase.
+   */
+  function signInWithGis(clientId) {
+    const cid = String(clientId || '').trim();
+    if (!cid) return Promise.reject(new Error('لم يُضبط معرّف عميل Google'));
+
+    /* نحتاج Firebase Auth لتحويل رمز Google إلى جلسة.
+       نهيّئ Firebase أولاً، ثم نُحمّل مكتبة Google Identity. */
+    return initFirebase().then(() => loadGis()).then(() => {
+      if (!fb.auth) {
+        const e = new Error('لم تُهيَّأ وحدة الدخول في Firebase — تحقق من إعدادات المزامنة.');
+        e.code = 'auth/configuration-not-found';
+        throw e;
+      }
+      setState({ busy: true, error: '', errorCode: '' });
+
+      return new Promise((resolve, reject) => {
+        let done = false;
+        const finish = (fn, v) => { if (!done) { done = true; fn(v); } };
+
+        /* مهلة واسعة: المستخدم قد يتأخر في اختيار الحساب */
+        const timer = setTimeout(() => {
+          finish(reject, (() => {
+            const e = new Error('لم يكتمل الدخول. أعد المحاولة واختر حسابك.');
+            e.code = 'auth/timeout';
+            return e;
+          })());
+        }, 120000);
+
+        try {
+          const oauth2 = global.google.accounts.oauth2;
+          const client = oauth2.initTokenClient({
+            client_id: cid,
+            scope: 'openid email profile',
+            prompt: 'select_account',
+            callback: resp => {
+              clearTimeout(timer);
+              if (!resp || resp.error) {
+                const e = new Error(resp && resp.error_description
+                  ? resp.error_description
+                  : 'لم يتم اختيار حساب Google.');
+                e.code = 'auth/' + ((resp && resp.error) || 'cancelled');
+                finish(reject, e);
+                return;
+              }
+              if (!resp.id_token) {
+                const e = new Error('لم يُعِد Google رمز الهوية. أضف نطاقك في Authorized JavaScript origins.');
+                e.code = 'gis/no-id-token';
+                finish(reject, e);
+                return;
+              }
+              /* نحوّل رمز Google إلى جلسة Firebase */
+              const provider = googleProvider();
+              const cred = provider.credential(resp.id_token);
+              fb.auth.signInWithCredential(cred).then(c => {
+                finish(resolve, { user: (c && c.user) || c });
+              }).catch(err => {
+                clearTimeout(timer);
+                finish(reject, err);
+              });
+            },
+          });
+          client.requestAccessToken();
+        } catch (err) {
+          clearTimeout(timer);
+          const e = new Error('تعذّر بدء الدخول من Google: ' + (err && err.message ? err.message : err));
+          e.code = 'gis/init-failed';
+          finish(reject, e);
+        }
+      });
     });
   }
 
@@ -247,6 +383,33 @@
   function signInGoogle() {
     if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
+
+    /* -----------------------------------------------------------------
+       المسار المفضَّل: Google Identity Services إن كان معرّف العميل مضبوطاً.
+       يعمل من نطاقنا بلا تخزين طرف ثالث، ولذلك ينجح على الهاتف.
+       ----------------------------------------------------------------- */
+    const cid = googleClientId();
+    if (cid) {
+      return signInWithGis(cid).catch(err => {
+        const code = (err && err.code) || '';
+        /* إن فشل GIS لسبب قابل للتجاوز، ننتقل إلى مسار Firebase المعتاد.
+           الإلغاء وعدم اختيار حساب من هذه الأسباب أيضاً. */
+        const retryable =
+          code === 'gis/init-failed' || code === 'gis/not-ready' ||
+          code === 'auth/timeout' || code === 'auth/cancelled' ||
+          code === 'auth/access_denied' || code === 'auth/popup_closed' ||
+          /id-token/i.test(code);
+        if (!retryable) throw err;
+        return signInWithFirebaseGoogle();
+      });
+    }
+
+    /* بلا معرّف عميل: مسار Firebase المعتاد */
+    return signInWithFirebaseGoogle();
+  }
+
+  /** مسار Firebase المعتاد: نافذة منبثقة ثم إعادة توجيه */
+  function signInWithFirebaseGoogle() {
     return initFirebase().then(() => {
       const provider = googleProvider();
       setState({ busy: true, error: '', errorCode: '' });
@@ -690,6 +853,10 @@
     disconnect() { return signOut().then(() => clearConfig()); },
     reset() { clearConfig(); },
     connect,
+    /** Google Identity Services: معرّف عميل Google (الحل للهاتف) */
+    googleClientId,
+    setGoogleClientId,
+    hasGoogleClientId,
     /** يُعالج نتيجة إعادة التوجيه عند العودة من Google */
     consumeRedirect,
     /** آخر خطأ من إعادة التوجيه (للتشخيص) */

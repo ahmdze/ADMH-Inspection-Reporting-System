@@ -153,11 +153,11 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
                   'report-word.js', 'report-print.js'];
     fetch('app.js', { cache: 'no-store' }).then(r => r.text()).then(t => {
       const v = (/APP_VERSION\s*=\s*'([^']+)'/.exec(t) || [])[1] || '؟';
-      if (v === '8.0.0') {
+      if (v === '9.0.0') {
         line('#envChecks', 'ok', 'نسخة النظام', v + ' — حديثة');
       } else {
         warnings++;
-        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 8.0.0 — حدّث الموقع وامسح ذاكرة المتصفح');
+        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 9.0.0 — حدّث الموقع وامسح ذاكرة المتصفح');
       }
     }).catch(() => {});
 
@@ -184,6 +184,39 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
       (location.hostname.endsWith('.workers.dev') || location.hostname.endsWith('.pages.dev')
         ? ' — يجب إضافته في Firebase' : ''),
       location.hostname);
+
+    /* ---------------------------------------------------------------------
+       فحص Google Identity Services — المسار الذي يعمل على الهاتف.
+       بدونه قد يُكمل Google الدخول ولا تصل النتيجة إلى الموقع إطلاقاً.
+       --------------------------------------------------------------------- */
+    try {
+      const hasClient = !!(sync && sync.hasGoogleClientId && sync.hasGoogleClientId());
+      if (hasClient) {
+        line('#envChecks', 'ok', 'معرّف عميل Google',
+          'مضبوط — الهاتف مدعوم عبر Google Identity Services');
+        line('#envChecks', 'wait', 'فحص تسجيل النطاق في Google Cloud…', location.hostname);
+        fetch('https://accounts.google.com/gsi/status', { cache: 'no-store' })
+          .then(r => r.text())
+          .then(t => {
+            document.querySelectorAll('#envChecks .wait').forEach(e => e.remove());
+            const allowed = /"configured"\s*:\s*true/i.test(t) || /"allowed"\s*:\s*true/i.test(t);
+            if (allowed) {
+              line('#envChecks', 'ok', 'النطاق مسجَّل في Google Cloud', location.hostname);
+            } else {
+              warnings++;
+              line('#envChecks', 'warn', 'النطاق قد لا يكون مسجَّلاً في Google Cloud',
+                'أضف ' + location.hostname + ' في Authorized JavaScript origins');
+            }
+          })
+          .catch(() => {
+            document.querySelectorAll('#envChecks .wait').forEach(e => e.remove());
+            line('#envChecks', 'warn', 'تعذّر فحص Google Cloud', 'الأمر ليس قاطعاً — جرّب الدخول');
+          });
+      } else {
+        line('#envChecks', 'warn', 'معرّف عميل Google غير مضبوط',
+          'إن فشل الدخول على الهاتف: الإعدادات ← معرّف عميل Google');
+      }
+    } catch (e) {}
   } else {
     line('#envChecks', 'warn', 'النطاق الحالي', 'لا نطاق (فتحتَ الملف محلياً عبر file://) — الدخول لن يعمل بلا نطاق');
   }

@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '8.0.0';
+const APP_VERSION = '9.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1268,6 +1268,18 @@ function bindButtons() {
 
   /* المزامنة السحابية — الدخول بحساب Google فقط */
   bindOn('#btnSyncGoogle', () => syncNow(true));
+  /* حفظ معرّف عميل Google: بدونه قد يفشل الدخول على الهاتف */
+  bindOn('#btnSaveGClient', () => {
+    if (!sync.available()) { toast('وحدة المزامنة غير محمّلة', 'err'); return; }
+    const v = (($('#syncGClient') && $('#syncGClient').value) || '').trim();
+    if (v && !/\.apps\.googleusercontent\.com$/.test(v)) {
+      toast('المعرّف يجب أن ينتهي بـ .apps.googleusercontent.com', 'warn', 6000);
+      return;
+    }
+    sync.get().setGoogleClientId(v);
+    renderSyncUI();
+    toast(v ? 'حُفظ معرّف عميل Google — أعد المحاولة الآن' : 'أُزيل معرّف عميل Google', 'ok', 4000);
+  });
   bindOn('#btnSyncNow', () => syncNow(true));
   bindOn('#btnSyncSignOut', () => {
     const S = sync.get();
@@ -1369,6 +1381,7 @@ function verifyBindings() {
     'btnListsSaveDefault', 'btnListsExport', 'btnListsImport', 'btnListsResetAll',
     'btnCopy',
   'newSave', 'newDiscard',
+  'btnSaveGClient',
     'btnListAdd', 'btnListReset', 'listPicker',
     'bulkFillEmpty', 'bulkFillAll'];
   const missing = must.filter(id => {
@@ -2181,6 +2194,17 @@ function renderSyncUI(st) {
     setText('#syncStateText', st.busy ? 'جاري المزامنة…' : st.connected ? 'متصل ✓' : 'غير متصل');
     setText('#syncLastText', st.lastSync ? new Date(st.lastSync).toLocaleString('ar-IQ') : 'لم تتم بعد');
     setText('#syncDeviceText', st.device || '—');
+
+    /* حالة معرّف عميل Google — يحدّد هل نستخدم المسار الذي يعمل على الهاتف */
+    const S = sync.available() ? sync.get() : null;
+    const hasG = !!(S && S.hasGoogleClientId && S.hasGoogleClientId());
+    setText('#gcidState', hasG ? '✓ مضبوط — الهاتف مدعوم' : 'غير مضبوط');
+    const gi = $('#syncGClient');
+    if (gi && document.activeElement !== gi && S && S.googleClientId) {
+      const v = S.googleClientId();
+      if (v && !gi.value) gi.value = v;
+    }
+
     const ed = $('#syncConfigEdit');
     if (ed && document.activeElement !== ed) {
       const c = sync.available() ? sync.get().getConfig() : null;

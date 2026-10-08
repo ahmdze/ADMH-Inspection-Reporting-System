@@ -742,6 +742,27 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
               الدخول بحساب <b>Google فقط</b> — لا كلمات مرور في النظام.
               استخدم <b>نفس حساب Google</b> على كل أجهزتك.
             </p>
+
+            <details id="gcidBox" style="margin:0 0 12px">
+              <summary style="cursor:pointer;color:var(--primary-2);font-size:.92em">
+                ⚙️ معرّف عميل Google — الحل الموصى به للهاتف
+              </summary>
+              <div class="f" style="margin-top:10px">
+                <label for="syncGClient">Google OAuth Client ID</label>
+                <input type="text" id="syncGClient" placeholder="1234567890-xxxxxxxx.apps.googleusercontent.com" autocomplete="off">
+              </div>
+              <p class="hint" style="margin:6px 0 0">
+                من <b>Google Cloud Console</b> ← <b>APIs &amp; Services</b> ← <b>Credentials</b> ←
+                <b>Create credentials</b> ← <b>OAuth client ID</b> ← نوع <b>Web application</b>،
+                ثم أضف نطاقك في <b>Authorized JavaScript origins</b>.
+                بدونه يعمل النظام بمسار Firebase العادي، وقد يفشل على الهاتف.
+              </p>
+              <div class="btnrow" style="margin-top:8px">
+                <button class="btn ghost sm" id="btnSaveGClient">حفظ المعرّف</button>
+                <span class="pill" id="gcidState"></span>
+              </div>
+            </details>
+
             <div class="btnrow">
               <button class="btn ok" id="btnSyncGoogle">🔵 الدخول بحساب Google</button>
             </div>
