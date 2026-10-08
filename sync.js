@@ -36,6 +36,20 @@
     storageBucket: "admh-inspection-reporting-sys.firebasestorage.app",
     messagingSenderId: "744885015267",
     appId: "1:744885015267:web:8680b5671f503f992b2bd6",
+
+    /* -------------------------------------------------------------------------
+       معرّف عميل Google — مضمَّن حتى لا يحتاج المستخدم لإدخاله يدوياً.
+       يُستخدم لـ Google Identity Services: هو المسار الذي يعمل على الهاتف،
+       لأن إعادة توجيه Firebase تعتمد على تخزين الطرف الثالث الذي يحجبه
+       كروم على أندرويد.
+
+       ملاحظة أمنية: هذا المعرّف **عام بطبيعته** — يُرسل إلى المتصفح في كل
+       الأحوال، تماماً مثل مفاتيح Firebase أعلاه. الحماية الفعلية تأتي من:
+         1) Authorized JavaScript origins في Google Cloud Console (نطاقك فقط).
+         2) قواعد أمان Firestore في Firebase.
+       لذلك لا بأس بتضمينه، ولا حاجة لسرّية العميل (Client Secret) إطلاقاً.
+       ------------------------------------------------------------------------- */
+    googleClientId: "744885015267-gp8dnfvsdk08vl712hpot371fndn1886.apps.googleusercontent.com",
   };
 
   const state = {
@@ -119,17 +133,28 @@
   const GIS_SRC = 'https://accounts.google.com/gsi/client';
 
   /** معرّف عميل Google — مضمَّن أو محفوظ من الواجهة */
+  /** معرّف عميل Google — مضمَّن أو محفوظ من الواجهة.
+   *  setGoogleClientId('') لا يمسح المضمَّن، لذا نستخدم علماً صريحاً
+   *  يتيح للاختبارات تعطيل المسار المضمَّن وفحص مسار Firebase الاحتياطي. */
+  let gisDisabled = false;
   function googleClientId() {
+    if (gisDisabled) return '';
+    /* نضمن وجود الإعدادات حتى لو لم تُستدعَ init بعد (صفحة الفحص، أو
+       نداء مبكر من الواجهة). الإعدادات مضمَّنة فالتهيئة رخيصة. */
+    if (!cfg) cfg = resolveConfig();
     const c = (cfg && cfg.googleClientId) || '';
     if (c) return String(c).trim();
     try { return String(localStorage.getItem(LS_GCLIENT) || '').trim(); } catch (e) { return ''; }
   }
+  function setGisEnabled(on) { gisDisabled = !on; }
   function setGoogleClientId(id) {
     const v = String(id || '').trim();
     if (!cfg) cfg = resolveConfig();
     if (cfg) cfg.googleClientId = v;      /* في الذاكرة */
     try { localStorage.setItem(LS_GCLIENT, v); } catch (e) {}
-    /* لا نستدعي saveConfig هنا: الإعدادات مضمّنة، وتمرير undefined يمسحها */
+    /* لا نستدعي saveConfig هنا: الإعدادات مضمّنة، وتمرير undefined يمسحها.
+       معرّف فارغ يعني «عُد إلى المضمَّن» فنُعيد تفعيل المسار المضمَّن. */
+    gisDisabled = !v && !!(EMBEDDED_CONFIG && EMBEDDED_CONFIG.googleClientId);
     return v;
   }
   function hasGoogleClientId() { return !!googleClientId(); }
@@ -155,12 +180,58 @@
     return gisPromise;
   }
 
-  /** هل النطاق مسجَّل في Google Cloud Console؟ (فحص استباقي مفيد) */
-  function gisDomainAllowed() {
-    return fetch('https://accounts.google.com/gsi/status', { method: 'GET', cache: 'no-store' })
-      .then(r => r.text())
-      .then(t => /"configured"\s*:\s*true/i.test(t) || /"allowed"\s*:\s*true/i.test(t))
-      .catch(() => true);               /* الفحص مساعد فقط — لا نمنع المحاولة */
+  /** هل النطاق مسجَّل في Google Cloud Console؟
+   *
+   *  ملاحظة مهمة: نقطة /gsi/status لا تصلح لهذا الفحص (تُعيد 400 بلا معاملات)،
+   *  فكانت تُعطي إنذاراً كاذباً. الطريقة الحقيقية: نهيّئ Google Identity
+   *  Services فعلاً بـ client_id وننتظر error_callback — فإن لم يأتِ خطأ
+   *  خلال مدة قصيرة فالنطاق مسجَّل والمكتبة تعمل.
+   */
+  function verifyGisOrigin() {
+    const cid = googleClientId();
+    if (!cid) return Promise.resolve({ ok: false, reason: 'no-client', message: 'لم يُضبط معرّف عميل Google' });
+
+    return loadGis().then(() => {
+      return new Promise(resolve => {
+        let settled = false;
+        const finish = r => { if (!settled) { settled = true; resolve(r); } };
+
+        /* إن وصل خطأ صريح، فهو السبب الحقيقي */
+        const timer = setTimeout(() => {
+          /* لا خطأ = النطاق مسجَّل والمكتبة مهيّأة */
+          finish({ ok: true, message: 'مكتبة Google مهيّأة والنطاق مقبول' });
+        }, 2500);
+
+        try {
+          global.google.accounts.id.initialize({
+            client_id: cid,
+            callback: () => {},          /* لا نستخدم زر Google — يكفينا التهيئة */
+            error_callback: err => {
+              clearTimeout(timer);
+              const type = (err && err.type) || '';
+              let message = 'رفضت Google تهيئة الدخول من هذا النطاق.';
+              if (type === 'invalid_client') {
+                message = 'معرّف العميل غير صحيح — تأكد من نسخه كاملاً.';
+              } else if (type === 'origin_mismatch' || /origin/i.test(type)) {
+                message = 'النطاق غير مسجَّل في Authorized JavaScript origins.';
+              } else if (type === 'idpiframe_initialization_failed' || /idpiframe/i.test(type)) {
+                message = 'فشل تهيئة إطار Google — غالباً بسبب تخزين الطرف الثالث أو كوكيز محجوبة.';
+              } else if (type) {
+                message = 'رفضت Google التهيئة: ' + type + ' — النطاق أو المعرّف غير صحيح.';
+              }
+              finish({ ok: false, reason: type || 'gis-error', message: message });
+            },
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          finish({ ok: false, reason: 'init-failed', message: 'تعذّر تشغيل مكتبة Google: ' + (e && e.message) });
+        }
+      });
+    }).catch(err => ({
+      ok: false,
+      reason: (err && err.code) || 'load-failed',
+      message: (err && err.message) || 'تعذّر تحميل مكتبة Google Identity Services',
+    }));
   }
 
   /**
@@ -216,15 +287,27 @@
                 finish(reject, e);
                 return;
               }
-              /* نحوّل رمز Google إلى جلسة Firebase */
-              const provider = googleProvider();
-              const cred = provider.credential(resp.id_token);
-              fb.auth.signInWithCredential(cred).then(c => {
-                finish(resolve, { user: (c && c.user) || c });
-              }).catch(err => {
+              /* نحوّل رمز Google إلى جلسة Firebase.
+                 نلفّ التحويل بـ try لأن بعض نسخ المكتبة قد لا تُوفّر
+                 provider.credential — فنُظهر سبباً واضحاً بدل خطأ غامض. */
+              try {
+                const provider = googleProvider();
+                if (typeof provider.credential !== 'function') {
+                  const e = new Error('نسخة مكتبة Firebase لا تدعم تحويل رمز Google. حدّث الصفحة وأعد المحاولة.');
+                  e.code = 'auth/operation-not-supported-in-this-environment';
+                  throw e;
+                }
+                const cred = provider.credential(resp.id_token);
+                fb.auth.signInWithCredential(cred).then(c => {
+                  finish(resolve, { user: (c && c.user) || c });
+                }).catch(err => {
+                  clearTimeout(timer);
+                  finish(reject, err);
+                });
+              } catch (convErr) {
                 clearTimeout(timer);
-                finish(reject, err);
-              });
+                finish(reject, convErr);
+              }
             },
           });
           client.requestAccessToken();
@@ -269,6 +352,8 @@
       authDomain: String(raw.authDomain || `${projectId}.firebaseapp.com`).trim(),
       storageBucket: String(raw.storageBucket || `${projectId}.appspot.com`).trim(),
       messagingSenderId: String(raw.messagingSenderId || '').trim(),
+      /* معرّف عميل Google (Google Identity Services) — يُحفظ مع الإعدادات */
+      googleClientId: String(raw.googleClientId || '').trim(),
     };
   }
 
@@ -857,6 +942,10 @@
     googleClientId,
     setGoogleClientId,
     hasGoogleClientId,
+    /** يتحقق فعلياً أن النطاق مقبول لدى Google (بلا إنذارات كاذبة) */
+    verifyGisOrigin,
+    /** للاختبارات: تعطيل مسار Google Identity لفحص مسار Firebase الاحتياطي */
+    setGisEnabled,
     /** يُعالج نتيجة إعادة التوجيه عند العودة من Google */
     consumeRedirect,
     /** آخر خطأ من إعادة التوجيه (للتشخيص) */
