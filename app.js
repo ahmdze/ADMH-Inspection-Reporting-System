@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '5.2.0';
+const APP_VERSION = '6.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1277,10 +1277,8 @@ function bindButtons() {
     renderLibraryView(); toast('أُضيفت العبارة', 'ok');
   });
 
-  /* المزامنة السحابية — الإعدادات مضمّنة في sync.js، تبقى بيانات الدخول فقط */
-  bindOn('#btnSyncConnect', () => syncNow(true, 'email'));
-  bindOn('#btnSyncGoogle', () => syncNow(true, 'google'));
-  bindOn('#btnSyncForgot', () => syncForgotPassword());
+  /* المزامنة السحابية — الدخول بحساب Google فقط */
+  bindOn('#btnSyncGoogle', () => syncNow(true));
   bindOn('#btnSyncNow', () => syncNow(true));
   bindOn('#btnSyncSignOut', () => {
     const S = sync.get();
@@ -1378,7 +1376,7 @@ function verifyBindings() {
   const must = ['palBtn', 'themeBtn', 'helpBtn', 'btnWord', 'btnPreviewGo', 'btnNew', 'btnSaveLocal',
     'btnWord2', 'btnPrint', 'hamb', 'btnStdOfficials', 'btnAllRecords', 'btnBulkRecords',
     'btnStdRecs', 'btnExportAll', 'btnImport', 'btnWipe', 'btnSettingsSave', 'btnLibAdd',
-    'btnSyncNow', 'btnSyncSignOut', 'btnSyncConnect', 'btnSyncGoogle', 'btnSyncForgot', 'dot',
+    'btnSyncNow', 'btnSyncSignOut', 'btnSyncGoogle', 'dot',
     'btnListsSaveDefault', 'btnListsExport', 'btnListsImport', 'btnListsResetAll',
     'btnListAdd', 'btnListReset', 'listPicker',
     'bulkFillEmpty', 'bulkFillAll'];
@@ -2148,7 +2146,7 @@ function renderSyncUI(st) {
 }
 function setText(sel, v) { const e = $(sel); if (e) e.textContent = v; }
 
-function syncNow(userInitiated, mode) {
+function syncNow(userInitiated) {
   if (!sync.available()) { toast('وحدة المزامنة غير محمّلة', 'err'); return Promise.resolve(); }
   const S = sync.get();
 
@@ -2158,15 +2156,10 @@ function syncNow(userInitiated, mode) {
 
   return gate.then(() => {
     if (!S.isConnected()) {
-      const email = ($('#syncEmail') && $('#syncEmail').value.trim()) || '';
-      const pass = ($('#syncPassword') && $('#syncPassword').value) || '';
-      if (mode !== 'google') {
-        if (!email) { toast('أدخل البريد الإلكتروني', 'warn'); return; }
-        if (pass.length < 6) { toast('كلمة المرور 6 أحرف على الأقل', 'warn'); return; }
-      }
-      return S.connect(email, pass, mode).then(() => {
+      /* الدخول بحساب Google فقط — لا كلمات مرور في النظام */
+      return S.connect().then(cred => {
         renderSyncUI(S.status());
-        toast('تم الاتصال — جاري المزامنة', 'ok');
+        toast('تم الدخول: ' + (cred.email || cred.uid), 'ok');
         return S.syncNow();
       }).then(r => {
         if (r && !r.skipped) toast(`تمت المزامنة: ${r.total} تقرير`, 'ok');
@@ -2184,16 +2177,7 @@ function syncNow(userInitiated, mode) {
   });
 }
 
-/** إرسال رابط إعادة تعيين كلمة المرور */
-function syncForgotPassword() {
-  const S = sync.available() ? sync.get() : null;
-  if (!S || !S.requestReset) { toast('وحدة المزامنة غير محمّلة', 'err'); return; }
-  const email = ($('#syncEmail') && $('#syncEmail').value.trim()) || '';
-  if (!email) { toast('اكتب بريدك في الحقل أولاً', 'warn'); return; }
-  S.requestReset(email)
-    .then(() => toast('أُرسل رابط إعادة التعيين إلى بريدك. تفقّد الوارد والبريد المزعج.', 'ok', 9000))
-    .catch(err => toast(err.message, 'err', 9000));
-}
+/* لا كلمات مرور: أُزيلت إعادة التعيين */
 
 /* =============================================================================
    بناء التقرير (نص + HTML للمعاينة)

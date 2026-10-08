@@ -191,30 +191,10 @@
     });
   }
 
-  /** الدخول: Google إن توفّر، وإلا بالبريد وكلمة المرور، وإلا مجهول */
-  /**
-   * الدخول بالبريد وكلمة المرور.
-   *
-   * قرار مهم: لا نُجرب إنشاء حساب إلا عند auth/user-not-found تحديداً.
-   * كان الكود سابقاً يُنشئ حساباً عند أي فشل — بما فيه كلمة المرور الخاطئة —
-   * فيظهر للمستخدم «البريد مسجّل» بدل «كلمة المرور خاطئة»، وهو تضليل كامل.
-   * (كان هذا خطأً حقيقياً في الكود، اكتُشف من رسالة خطأ المستخدم.)
-   */
-  function signInEmail(email, password) {
-    if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
-    return initFirebase().then(() =>
-      fb.auth.signInWithEmailAndPassword(email, password).catch(err => {
-        const code = (err && err.code) || '';
-        if (code === 'auth/user-not-found') {
-          /* لا يوجد حساب بهذا البريد — ننشئه */
-          return fb.auth.createUserWithEmailAndPassword(email, password);
-        }
-        /* كلمة مرور خاطئة، أو بريد مسجّل بمزوّد آخر (Google)، أو غير ذلك:
-           نُعيد الخطأ الأصلي كما هو ولا نخمّن. */
-        throw err;
-      })
-    );
-  }
+  /* ---------------------------------------------------------------------------
+     ملاحظة: أُزيل الدخول بالبريد وكلمة المرور نهائياً بطلب صريح.
+     الطريقة الوحيدة للدخول هي حساب Google.
+     --------------------------------------------------------------------------- */
 
   /** إيجاد مزوّد Google بأمان: firebase.auth.GoogleAuthProvider في نسخة compat */
   function googleProvider() {
@@ -255,39 +235,73 @@
     try { localStorage.setItem('admh.sync.redirect', '1'); } catch (e) {}
   }
 
-  /** الدخول بحساب Google. */
+  /* ---------------------------------------------------------------------------
+     الدخول بحساب Google — الطريقة الوحيدة.
+     أُزيل الدخول بالبريد وكلمة المرور بطلب صريح.
+
+     الأولوية: النافذة المنبثقة (popup) دائماً، حتى على الهاتف.
+     السبب: إعادة التوجيه تنكسر عند إعادة فتح التطبيق المثبَّت من أيقونة
+     الشاشة الرئيسية — يعود المستخدم ولا شيء يحدث. المنبثقة تعمل في Chrome.
+     إعادة التوجيه خطة بديلة، مع استرجاع قوي للجلسة بعد العودة.
+     --------------------------------------------------------------------------- */
   function signInGoogle() {
+    if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
     return initFirebase().then(() => {
       const provider = googleProvider();
+      setState({ busy: true, error: '', errorCode: '' });
 
-      /* في المتصفح تُغادر الصفحة فلا يعود الوعد أبداً، لكن نُبقي مساراً
-         آمناً: إن عاد الوعد (بيئة لا تُوجّه فعلاً) نرمي خطأً واضحاً
-         بدل التعليق الصامت. */
       const goRedirect = () => {
-        setState({ busy: true, error: '' });
+        if (!fb.auth.signInWithRedirect) {
+          const e = new Error('هذا المتصفح لا يدعم إعادة التوجيه. افتح الموقع في Chrome.');
+          e.code = 'auth/operation-not-supported-in-this-environment';
+          throw e;
+        }
+        rememberRedirect();
         return fb.auth.signInWithRedirect(provider).then(() => {
-          const e = new Error('لم تكتمل إعادة التوجيه إلى Google. افتح الموقع في Chrome أو Safari مباشرةً وتأكد أن الكوكيز مسموحة.');
+          const e = new Error('لم تكتمل إعادة التوجيه إلى Google. افتح الموقع في Chrome أو Safari مباشرةً.');
           e.code = 'auth/redirect-did-not-navigate';
           throw e;
         });
       };
 
-      if (preferRedirect() && fb.auth.signInWithRedirect) return goRedirect();
-
+      /* المنبثقة أولاً */
       return fb.auth.signInWithPopup(provider).catch(err => {
         const code = (err && err.code) || '';
-        /* النافذة المنبثقة تفشل على كثير من الأجهزة: انتقل إلى إعادة
-           التوجيه واذكر ذلك للاستخدامات القادمة. */
-        if ((code === 'auth/popup-blocked' || code === 'auth/internal-error'
-             || code === 'auth/operation-not-supported-in-this-environment'
-             || code === 'auth/cancelled-popup-request'
-             || code === 'auth/web-storage-unsupported') && fb.auth.signInWithRedirect) {
-          rememberRedirect();
-          return goRedirect();
-        }
+        /* «أغلق المستخدم النافذة» ليس سبباً للتوجيه القسري */
+        if (code === 'auth/popup-closed-by-user' && !redirectPreferred) throw err;
+        const fallbackable =
+          code === 'auth/popup-blocked' ||
+          code === 'auth/popup-closed-by-user' ||
+          code === 'auth/cancelled-popup-request' ||
+          code === 'auth/operation-not-supported-in-this-environment' ||
+          code === 'auth/web-storage-unsupported' ||
+          code === 'auth/internal-error';
+        if (fallbackable && fb.auth.signInWithRedirect) return goRedirect();
         throw err;
       });
+    });
+  }
+
+  /** ينتظر ظهور جلسة محفوظة بعد العودة من إعادة التوجيه.
+   *  Firebase يحفظ الجلسة تلقائياً، فانتظارها أكثر موثوقية من الاعتماد
+   *  على getRedirectResult وحدها — وهذا ما كان يفشل على الهاتف. */
+  function waitForSession(timeoutMs) {
+    const deadline = Date.now() + (timeoutMs || 6000);
+    return new Promise(resolve => {
+      const tick = () => {
+        if (fb.auth && fb.auth.currentUser) {
+          const u = fb.auth.currentUser;
+          state.user = u;
+          lastRedirectError = null;
+          setState({ connected: true, busy: false, user: u, error: '', errorCode: '' });
+          resolve(u);
+          return;
+        }
+        if (Date.now() > deadline) { resolve(null); return; }
+        setTimeout(tick, 250);
+      };
+      tick();
     });
   }
 
@@ -295,40 +309,44 @@
   let lastRedirectError = null;
   function redirectError() { return lastRedirectError; }
 
-  /** يعالج نتيجة إعادة التوجيه إن كنا عائدين من Google */
+  /** يعالج العودة من Google.
+   *  لا نعتمد على getRedirectResult وحدها (كانت تفشل على الهاتف)، بل:
+   *    ١) نقرأ getRedirectResult ونلتقط أي خطأ حقيقي منها
+   *    ٢) ثم ننتظر الجلسة المحفوظة — Firebase يحفظها، وهذا يكفي للدخول */
   function consumeRedirect() {
     if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.resolve(null);
     /* نهيّئ Firebase إن لم يكن مهيّأً بعد (صفحة الفحص تستدعي هذا مباشرة) */
     return initFirebase().then(() => {
-      if (!fb.auth || !fb.auth.getRedirectResult) return null;
-      return fb.auth.getRedirectResult().then(res => {
-        if (res && res.user) {
-          state.user = res.user;
+      const fromRedirect = (fb.auth && fb.auth.getRedirectResult)
+        ? fb.auth.getRedirectResult().then(res => {
+            if (res && res.user) return res.user;
+            return null;
+          }).catch(err => {
+            const code = (err && err.code) || '';
+            if (code && code !== 'auth/no-auth-event') {
+              const e = taggedError(err, friendlyError(err));
+              lastRedirectError = { code: code, message: (err && err.message) || String(err) };
+              setState({ busy: false, error: e.message, errorCode: code });
+            }
+            return null;
+          })
+        : Promise.resolve(null);
+
+      return fromRedirect.then(user => {
+        if (user) {
+          state.user = user;
           lastRedirectError = null;
-          setState({ connected: true, busy: false, user: res.user, error: '', errorCode: '' });
-          return res.user;
+          setState({ connected: true, busy: false, user: user, error: '', errorCode: '' });
+          return user;
         }
-        return null;
+        /* مهلة قصيرة: الجلسة المحفوظة تظهر عادةً خلال أجزاء من الثانية */
+        return waitForSession(2500);
       });
-    }).catch(err => {
-      /* لا نُفشل الإقلاع إن لم تكن هناك إعادة توجيه أصلاً، لكن نُظهر السبب
-         الحقيقي بدل كتمه — وإلا بقي المستخدم بلا أي تفسير. */
-      const code = (err && err.code) || '';
-      if (code && code !== 'auth/no-auth-event') {
-        const e = taggedError(err, friendlyError(err));
-        lastRedirectError = { code: code, message: (err && err.message) || String(err) };
-        setState({ busy: false, error: e.message, errorCode: code });
-      }
-      return null;
     });
   }
 
-  /** إرسال رابط إعادة تعيين كلمة المرور */
-  function resetPassword(email) {
-    if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
-    return initFirebase().then(() => fb.auth.sendPasswordResetEmail(email));
-  }
+  /* إعادة تعيين كلمة المرور أُزيلت: لا كلمات مرور في النظام إطلاقاً */
 
   function signOut() {
     if (!fb.auth) return Promise.resolve();
@@ -605,38 +623,33 @@
 
   /* --------------------------------------------------------- الاتصال */
   /**
-   * mode: 'google' للدخول بحساب Google، وأي شيء آخر = بريد وكلمة مرور.
+   * الدخول — بحساب Google فقط.
+   * أُزيلت معاملات البريد وكلمة المرور بطلب صريح. تُقبل ولا تُستخدم،
+   * للتوافق مع أي نداء قديم.
    */
-  function connect(email, password, mode) {
+  function connect() {
     /* الإعدادات مضمّنة، لذا نضمن وجودها حتى لو لم تُستدعَ init بعد
        (مثل صفحة الفحص المستقلة). ونضمن كذلك وجود الخطّافات. */
     if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
     ensureInit();
-    setState({ busy: true, error: '' });
+    setState({ busy: true, error: '', errorCode: '' });
 
-    const attempt = mode === 'google' ? signInGoogle() : signInEmail(email, password);
-
-    return attempt.then(cred => {
+    return signInGoogle().then(cred => {
       const user = (cred && cred.user) || cred;
-      if (!user) throw new Error('تعذّر تسجيل الدخول');
+      if (!user) throw new Error('تعذّر تسجيل الدخول بحساب Google');
       state.user = user;
-      setState({ connected: true, busy: false, user, error: '' });
-      return { uid: user.uid, email: user.email || (user.isAnonymous ? 'مستخدم مجهول' : '') };
+      lastRedirectError = null;
+      setState({ connected: true, busy: false, user: user, error: '', errorCode: '' });
+      return { uid: user.uid, email: user.email || '' };
     }).catch(err => {
       const msg = friendlyError(err);
-      setState({ busy: false, error: msg });
+      setState({ busy: false, error: msg, errorCode: (err && err.code) || '' });
       throw taggedError(err, msg);
     });
   }
 
-  function requestReset(email) {
-    if (!cfg) cfg = resolveConfig();
-    if (!email) return Promise.reject(new Error('أدخل البريد الإلكتروني أولاً'));
-    return resetPassword(email).then(() => true).catch(err => {
-      throw taggedError(err, friendlyError(err));
-    });
-  }
+  /* لا كلمات مرور: لا حاجة لإعادة تعيينها */
 
   /* --------------------------------------------------------- الواجهة العامة */
   const API = {
@@ -655,7 +668,6 @@
     disconnect() { return signOut().then(() => clearConfig()); },
     reset() { clearConfig(); },
     connect,
-    requestReset,
     /** يُعالج نتيجة إعادة التوجيه عند العودة من Google */
     consumeRedirect,
     /** آخر خطأ من إعادة التوجيه (للتشخيص) */
