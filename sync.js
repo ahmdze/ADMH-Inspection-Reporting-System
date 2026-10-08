@@ -180,7 +180,55 @@
     return gisPromise;
   }
 
-  /** هل النطاق مسجَّل في Google Cloud Console؟
+  /* ---------------------------------------------------------------------------
+     تجهيز مسبق لـ Google Identity Services.
+     ---------------------------------------------------------------------------
+     مهم: يجب أن يُنفَّذ requestAccessToken داخل تفعيل نقرة المستخدم مباشرةً.
+     إن انتظرنا تحميل المكتبات أولاً، يضيع التفعيل فيحوّله Chrome إلى إعادة
+     توجيه كاملة — وهذا ما كان يحدث على الهاتف (نافذة ثم انتقال).
+     لذلك نُجهّز المكتبة والعميل مسبقاً، ويصبح الطلب عند النقر فورياً.
+     --------------------------------------------------------------------------- */
+  let gisClient = null;      /* عميل الرمز المُهيَّأ */
+  let gisClientCid = '';     /* المعرّف الذي بُني به */
+  let prepPromise = null;    /* وعد التجهيز المسبق */
+
+  /** يُنشئ عميل الرمز ويُخزّنه (يُستدعى من التجهيز المسبق أو عند الحاجة) */
+  function ensureGisClient(cid) {
+    if (gisClient && gisClientCid === cid) return gisClient;
+    const oauth2 = global.google && global.google.accounts && global.google.accounts.oauth2;
+    if (!oauth2) {
+      const e = new Error('مكتبة Google Identity غير محمّلة');
+      e.code = 'gis/not-ready';
+      throw e;
+    }
+    gisClientCid = cid;
+    gisClient = oauth2.initTokenClient({
+      client_id: cid,
+      scope: 'openid email profile',
+      /* نضع نداءً افتراضياً يُستبدل عند كل محاولة */
+      callback: () => {},
+    });
+    return gisClient;
+  }
+
+  /** تجهيز مسبق: Firebase + مكتبة Google + عميل الرمز */
+  function prepareGoogle() {
+    const cid = googleClientId();
+    if (!cid) return Promise.resolve(false);
+    if (prepPromise) return prepPromise;
+    prepPromise = initFirebase()
+      .then(() => loadGis())
+      .then(() => {
+        /* نبني العميل فعلاً — لا نكتفي بتحميل المكتبة */
+        ensureGisClient(cid);
+        return true;
+      })
+      .catch(() => { prepPromise = null; return false; });
+    return prepPromise;
+  }
+  function googleReady() { return !!gisClient && gisClientCid === googleClientId(); }
+
+  /** يتحقق فعلياً أن النطاق مقبول لدى Google.
    *
    *  ملاحظة مهمة: نقطة /gsi/status لا تصلح لهذا الفحص (تُعيد 400 بلا معاملات)،
    *  فكانت تُعطي إنذاراً كاذباً. الطريقة الحقيقية: نهيّئ Google Identity
@@ -235,89 +283,113 @@
   }
 
   /**
-   * الدخول عبر Google Identity Services.
-   * يُعيد وعداً بكائن اعتماد Firebase.
+   * يبدأ طلب رمز Google **فوراً** من العميل المُهيَّأ مسبقاً.
+   * ---------------------------------------------------------------------------
+   * مهم جداً: هذه الدالة يجب أن تُستدعى داخل تفعيل نقرة المستخدم مباشرةً.
+   * فهي لا تنتظر أي وعد — تُسند النداء ثم تطلب الرمز في نفس المهمة، فيبقى
+   * الطلب نافذة منبثقة لا إعادة توجيه كاملة. الانتظار هنا هو ما كان يجعل
+   * Chrome يحوّل النافذة إلى انتقال كامل على الهاتف.
+   * ---------------------------------------------------------------------------
+   */
+  function startGisRequest() {
+    return new Promise((resolve, reject) => {
+      if (!gisClient) {
+        const e = new Error('عميل Google غير مُهيَّأ');
+        e.code = 'gis/not-ready';
+        reject(e);
+        return;
+      }
+      let done = false;
+      const finish = (fn, v) => { if (!done) { done = true; fn(v); } };
+
+      /* مهلة واسعة: المستخدم قد يتأخر في اختيار الحساب */
+      const timer = setTimeout(() => {
+        finish(reject, (() => {
+          const e = new Error('لم يكتمل الدخول. أعد المحاولة واختر حسابك.');
+          e.code = 'auth/timeout';
+          return e;
+        })());
+      }, 120000);
+
+      /* نُسند النداء ثم نطلب الرمز — بلا أي انتظار */
+      gisClient.callback = resp => {
+        clearTimeout(timer);
+        if (!resp || resp.error) {
+          const e = new Error(resp && resp.error_description
+            ? resp.error_description
+            : 'لم يتم اختيار حساب Google.');
+          e.code = 'auth/' + ((resp && resp.error) || 'cancelled');
+          finish(reject, e);
+          return;
+        }
+        if (!resp.id_token) {
+          const e = new Error('لم يُعِد Google رمز الهوية. أضف نطاقك في Authorized JavaScript origins.');
+          e.code = 'gis/no-id-token';
+          finish(reject, e);
+          return;
+        }
+        /* نحوّل رمز Google إلى جلسة Firebase.
+           نلفّ التحويل بـ try لأن بعض نسخ المكتبة قد لا تُوفّر
+           provider.credential — فنُظهر سبباً واضحاً بدل خطأ غامض. */
+        try {
+          const provider = googleProvider();
+          if (typeof provider.credential !== 'function') {
+            const e = new Error('نسخة مكتبة Firebase لا تدعم تحويل رمز Google. حدّث الصفحة وأعد المحاولة.');
+            e.code = 'auth/operation-not-supported-in-this-environment';
+            throw e;
+          }
+          const cred = provider.credential(resp.id_token);
+          fb.auth.signInWithCredential(cred).then(c => {
+            finish(resolve, { user: (c && c.user) || c });
+          }).catch(err => {
+            clearTimeout(timer);
+            finish(reject, err);
+          });
+        } catch (convErr) {
+          clearTimeout(timer);
+          finish(reject, convErr);
+        }
+      };
+
+      try {
+        gisClient.requestAccessToken();
+      } catch (err) {
+        clearTimeout(timer);
+        const e = new Error('تعذّر بدء الدخول من Google: ' + (err && err.message ? err.message : err));
+        e.code = 'gis/init-failed';
+        finish(reject, e);
+      }
+    });
+  }
+
+  /**
+   * الدخول عبر Google Identity Services (المسار الكامل: تجهيز ثم طلب).
+   * للطلبات التي لا تحتاج تفعيل نقرة فوري.
    */
   function signInWithGis(clientId) {
     const cid = String(clientId || '').trim();
     if (!cid) return Promise.reject(new Error('لم يُضبط معرّف عميل Google'));
 
-    /* نحتاج Firebase Auth لتحويل رمز Google إلى جلسة.
-       نهيّئ Firebase أولاً، ثم نُحمّل مكتبة Google Identity. */
-    return initFirebase().then(() => loadGis()).then(() => {
+    return prepareGoogle().then(() => {
       if (!fb.auth) {
         const e = new Error('لم تُهيَّأ وحدة الدخول في Firebase — تحقق من إعدادات المزامنة.');
         e.code = 'auth/configuration-not-found';
         throw e;
       }
+      if (!global.google || !global.google.accounts || !global.google.accounts.oauth2) {
+        const e = new Error('مكتبة Google Identity غير محمّلة');
+        e.code = 'gis/not-ready';
+        throw e;
+      }
+      try {
+        ensureGisClient(cid);
+      } catch (initErr) {
+        const e = new Error('تعذّر تجهيز الدخول من Google: ' + (initErr && initErr.message));
+        e.code = 'gis/init-failed';
+        throw e;
+      }
       setState({ busy: true, error: '', errorCode: '' });
-
-      return new Promise((resolve, reject) => {
-        let done = false;
-        const finish = (fn, v) => { if (!done) { done = true; fn(v); } };
-
-        /* مهلة واسعة: المستخدم قد يتأخر في اختيار الحساب */
-        const timer = setTimeout(() => {
-          finish(reject, (() => {
-            const e = new Error('لم يكتمل الدخول. أعد المحاولة واختر حسابك.');
-            e.code = 'auth/timeout';
-            return e;
-          })());
-        }, 120000);
-
-        try {
-          const oauth2 = global.google.accounts.oauth2;
-          const client = oauth2.initTokenClient({
-            client_id: cid,
-            scope: 'openid email profile',
-            prompt: 'select_account',
-            callback: resp => {
-              clearTimeout(timer);
-              if (!resp || resp.error) {
-                const e = new Error(resp && resp.error_description
-                  ? resp.error_description
-                  : 'لم يتم اختيار حساب Google.');
-                e.code = 'auth/' + ((resp && resp.error) || 'cancelled');
-                finish(reject, e);
-                return;
-              }
-              if (!resp.id_token) {
-                const e = new Error('لم يُعِد Google رمز الهوية. أضف نطاقك في Authorized JavaScript origins.');
-                e.code = 'gis/no-id-token';
-                finish(reject, e);
-                return;
-              }
-              /* نحوّل رمز Google إلى جلسة Firebase.
-                 نلفّ التحويل بـ try لأن بعض نسخ المكتبة قد لا تُوفّر
-                 provider.credential — فنُظهر سبباً واضحاً بدل خطأ غامض. */
-              try {
-                const provider = googleProvider();
-                if (typeof provider.credential !== 'function') {
-                  const e = new Error('نسخة مكتبة Firebase لا تدعم تحويل رمز Google. حدّث الصفحة وأعد المحاولة.');
-                  e.code = 'auth/operation-not-supported-in-this-environment';
-                  throw e;
-                }
-                const cred = provider.credential(resp.id_token);
-                fb.auth.signInWithCredential(cred).then(c => {
-                  finish(resolve, { user: (c && c.user) || c });
-                }).catch(err => {
-                  clearTimeout(timer);
-                  finish(reject, err);
-                });
-              } catch (convErr) {
-                clearTimeout(timer);
-                finish(reject, convErr);
-              }
-            },
-          });
-          client.requestAccessToken();
-        } catch (err) {
-          clearTimeout(timer);
-          const e = new Error('تعذّر بدء الدخول من Google: ' + (err && err.message ? err.message : err));
-          e.code = 'gis/init-failed';
-          finish(reject, e);
-        }
-      });
+      return startGisRequest();
     });
   }
 
@@ -905,6 +977,28 @@
     ensureInit();
     setState({ busy: true, error: '', errorCode: '' });
 
+    /* -----------------------------------------------------------------
+       إن كان مسار Google Identity جاهزاً، نبدأ الطلب **فوراً في نفس
+       المهمة** قبل أي وعد. هذا ضروري ليبقى داخل تفعيل نقرة المستخدم،
+       وإلا حوّله Chrome إلى إعادة توجيه كاملة (ما كان يحدث على الهاتف).
+       ----------------------------------------------------------------- */
+    if (googleReady() && !gisDisabled) {
+      const started = startGisRequest();
+      /* نُكمل التجهيز (يعود فوراً لأنه جاهز) ثم ننتظر نتيجة الطلب */
+      return prepareGoogle().then(() => started).catch(err => {
+        const msg = friendlyError(err);
+        setState({ busy: false, error: msg, errorCode: (err && err.code) || '' });
+        throw taggedError(err, msg);
+      }).then(cred => {
+        const user = (cred && cred.user) || cred;
+        if (!user) throw new Error('تعذّر تسجيل الدخول بحساب Google');
+        state.user = user;
+        lastRedirectError = null;
+        setState({ connected: true, busy: false, user: user, error: '', errorCode: '' });
+        return { uid: user.uid, email: user.email || '' };
+      });
+    }
+
     return signInGoogle().then(cred => {
       const user = (cred && cred.user) || cred;
       if (!user) throw new Error('تعذّر تسجيل الدخول بحساب Google');
@@ -946,6 +1040,10 @@
     verifyGisOrigin,
     /** للاختبارات: تعطيل مسار Google Identity لفحص مسار Firebase الاحتياطي */
     setGisEnabled,
+    /** تجهيز مسبق لمكتبة Google (حتى يبقى طلب الدخول داخل تفعيل النقرة) */
+    prepareGoogle,
+    /** هل المكتبة جاهزة للطلب الفوري؟ */
+    googleReady,
     /** يُعالج نتيجة إعادة التوجيه عند العودة من Google */
     consumeRedirect,
     /** آخر خطأ من إعادة التوجيه (للتشخيص) */

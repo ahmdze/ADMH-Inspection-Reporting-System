@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '10.0.0';
+const APP_VERSION = '10.1.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1267,7 +1267,25 @@ function bindButtons() {
   });
 
   /* المزامنة السحابية — الدخول بحساب Google فقط */
-  bindOn('#btnSyncGoogle', () => syncNow(true));
+  bindOn('#btnSyncGoogle', () => {
+    const S = sync.available() ? sync.get() : null;
+
+    /* -----------------------------------------------------------------
+       مهم: يجب أن يقع طلب النافذة داخل تفعيل النقرة مباشرةً.
+       إن انتظرنا تحميل المكتبة في هذه اللحظة، يضيع التفعيل فيحوّله Chrome
+       إلى إعادة توجيه كاملة — وهذا سبب «نافذة ثم انتقال» على الهاتف.
+       لذلك: إن لم تكن المكتبة جاهزة نُجهّزها ونطلب من المستخدم نقرة ثانية.
+       ----------------------------------------------------------------- */
+    if (S && S.hasGoogleClientId && S.hasGoogleClientId() && S.googleReady && !S.googleReady()) {
+      toast('جارٍ تجهيز الدخول من Google… انتظر لحظة ثم اضغط الزر مرة أخرى.', 'warn', 5000);
+      S.prepareGoogle().then(ok => {
+        if (ok) toast('الدخول جاهز الآن — اضغط «الدخول بحساب Google»', 'ok', 5000);
+        else syncNow(true);        /* التجهيز فشل: نجرّب المسار المعتاد */
+      });
+      return;
+    }
+    syncNow(true);
+  });
 
   /* ---------------------------------------------------------------------
      معرّف عميل Google.
@@ -1957,7 +1975,17 @@ function showView(name) {
   if (name === 'preview') ADMHReport.run('المعاينة', ADMHReport.renderPreview);
   if (name === 'archive') renderArchive();
   if (name === 'library') renderLibraryView();
-  if (name === 'settings') fillSettingsForm();
+  if (name === 'settings') {
+    fillSettingsForm();
+    /* تجهيز مسبق لمكتبة Google: حتى يبقى طلب الدخول داخل تفعيل النقرة،
+       فلا يتحول إلى إعادة توجيه كاملة على الهاتف. */
+    if (sync.available()) {
+      const S = sync.get();
+      if (S.hasGoogleClientId && S.hasGoogleClientId() && S.prepareGoogle) {
+        S.prepareGoogle().catch(() => {});
+      }
+    }
+  }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 function fillSettingsForm() {
