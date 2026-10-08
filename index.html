@@ -591,6 +591,7 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
           <button class="btn ghost sm" data-go="report">← رجوع للتحرير</button>
           <span class="pill" id="previewMeta"></span>
           <span style="flex:1"></span>
+          <button class="btn info sm" id="btnCopy" title="انسخ التقرير بتنسيقه لتلصقه في أي مكان">📋 نسخ النص كاملاً</button>
           <button class="btn ok sm" id="btnWord2">📄 تصدير Word</button>
           <button class="btn ghost sm" id="btnPrint">🖨️ طباعة</button>
         </div>
@@ -855,6 +856,12 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 <script src="vendor/docx.umd.js"></script>
 <script src="options.js"></script>
 <script src="sync.js"></script>
+<!-- منطق التقرير: ملفات مستقلة لتسهيل التحرير عليها -->
 <script src="app.js"></script>
+<script src="report-model.js"></script>
+<script src="report-preview.js"></script>
+<script src="report-clipboard.js"></script>
+<script src="report-word.js"></script>
+<script src="report-print.js"></script>
 </body>
 </html>

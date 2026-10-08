@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '6.0.0';
+const APP_VERSION = '7.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -291,19 +291,6 @@ function fmtNum(n) {
   return isNaN(v) ? s : String(v);
 }
 
-/** تحويل data URL إلى بايتات + نوع الصورة (لإدراج الشعار في ملف Word) */
-function dataUrlToBytes(dataUrl) {
-  if (!dataUrl || typeof dataUrl !== 'string') return null;
-  const m = /^data:image\/(png|jpe?g|gif|bmp);base64,([\s\S]+)$/i.exec(dataUrl.trim());
-  if (!m) return null;
-  const ext = m[1].toLowerCase();
-  const type = ext === 'jpg' || ext === 'jpeg' ? 'jpg' : ext === 'bmp' ? 'png' : ext;
-  let bin;
-  try { bin = atob(m[2].replace(/\s+/g, '')); } catch (e) { return null; }
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return { bytes, type };
-}
 /** قياس أبعاد صورة من data URL بشكل غير متزامن */
 function measureDataUrl(dataUrl) {
   return new Promise(resolve => {
@@ -1165,10 +1152,14 @@ function bindButtons() {
   /* أزرار المكتبة داخل الأقسام — يُربط كل واحد بما يناسبه أدناه */
 
   /* تصدير / معاينة / حفظ */
-  bindOn('#btnWord', () => exportWord());
-  bindOn('#btnWord2', () => exportWord());
+  bindOn('#btnWord', () => ADMHReport.run('تصدير Word', ADMHReport.exportWord));
+  bindOn('#btnWord2', () => ADMHReport.run('تصدير Word', ADMHReport.exportWord));
   bindOn('#btnPreviewGo', () => showView('preview'));
-  bindOn('#btnPrint', () => { showView('preview'); setTimeout(() => window.print(), 250); });
+  /* نسخ التقرير بالكامل بتنسيقه إلى الحافظة */
+  bindOn('#btnCopy', () => { showView('preview'); setTimeout(() => ADMHReport.run('النسخ', ADMHReport.copyReport), 60); });
+
+  /* الطباعة: تُفوَّض إلى report-print.js */
+  bindOn('#btnPrint', () => { showView('preview'); setTimeout(() => ADMHReport.run('الطباعة', ADMHReport.printReport), 120); });
   bindOn('#btnSaveLocal', () => saveToArchive());
 
   /* جديد */
@@ -1378,6 +1369,7 @@ function verifyBindings() {
     'btnStdRecs', 'btnExportAll', 'btnImport', 'btnWipe', 'btnSettingsSave', 'btnLibAdd',
     'btnSyncNow', 'btnSyncSignOut', 'btnSyncGoogle', 'dot',
     'btnListsSaveDefault', 'btnListsExport', 'btnListsImport', 'btnListsResetAll',
+    'btnCopy',
     'btnListAdd', 'btnListReset', 'listPicker',
     'bulkFillEmpty', 'bulkFillAll'];
   const missing = must.filter(id => {
@@ -1876,7 +1868,7 @@ function showView(name) {
   if (el) el.classList.remove('hidden');
   $$('#nav button').forEach(b => b.classList.toggle('active', b.dataset.go === name));
   $('#nav').classList.remove('open'); $('#scrim').classList.remove('open');
-  if (name === 'preview') renderPreview();
+  if (name === 'preview') ADMHReport.run('المعاينة', ADMHReport.renderPreview);
   if (name === 'archive') renderArchive();
   if (name === 'library') renderLibraryView();
   if (name === 'settings') fillSettingsForm();
@@ -1965,7 +1957,7 @@ function fillArchType() {
 /* ---------------------------------------------------------------- الوضع الليلي */
 function applyTheme(dark) {
   document.body.classList.toggle('dark', dark);
-  $('#themeBtn').textContent = dark ? '☀️' : '🌙';
+  const tb = $('#themeBtn'); if (tb) tb.textContent = dark ? '☀️' : '🌙';
   try { localStorage.setItem(LS_THEME, dark ? 'dark' : 'light'); } catch (e) {}
   const m = document.querySelector('meta[name="theme-color"]');
   if (m) m.content = dark ? '#0f1517' : '#004d40';
@@ -1999,7 +1991,8 @@ const PALETTE = [
   { t: 'تقرير جديد', k: 'new', run: () => $('#btnNew').click() },
   { t: 'تصدير Word (.docx)', k: 'word', run: () => exportWord() },
   { t: 'معاينة التقرير', k: 'preview', run: () => showView('preview') },
-  { t: 'طباعة', k: 'print', run: () => { showView('preview'); setTimeout(() => window.print(), 250); } },
+  { t: 'نسخ التقرير بتنسيقه', k: 'copy', run: () => { showView('preview'); setTimeout(() => ADMHReport.run('النسخ', ADMHReport.copyReport), 60); } },
+  { t: 'طباعة', k: 'print', run: () => { showView('preview'); setTimeout(() => ADMHReport.run('الطباعة', ADMHReport.printReport), 120); } },
   { t: 'حفظ في الأرشيف', k: 'save', run: () => saveToArchive() },
   { t: 'إضافة كل السجلات المعتادة', k: 'records', run: () => $('#btnAllRecords').click() },
   { t: 'إضافة الجهات المعتادة للتوصيات', k: 'recgroups', run: () => $('#btnStdRecs').click() },
@@ -2182,387 +2175,50 @@ function syncNow(userInitiated) {
 /* =============================================================================
    بناء التقرير (نص + HTML للمعاينة)
    ============================================================================= */
-function buildModel() {
-  const r = state.report;
-  const t = tidy;
-  const fac = t(r.facilityName) || '...';
-  const sec = t(r.sector);
-  const kind = t(r.facilityKind) || 'مركز صحي';
-  const dstr = fmtDate(r.visitDate);
-  const day = t(r.dayName) || dayNameOf(r.visitDate);
-
-  const sub = (s) => s.replace(/\{المؤسسة\}/g, fac).replace(/\{القطاع\}/g, sec || 'القطاع');
-
-  const M = {
-    title: t(r.title) || autoTitle(r),
-    header: {
-      l1: t(state.settings.l1), l2: t(state.settings.l2), l3: t(state.settings.l3),
-      logo: state.logo || '',
-    },
-    meta: [],
-    intro: '',
-    sections: [],
-  };
-
-  /* بيانات علوية */
-  if (r.bookNumber) M.meta.push(['رقم الكتاب / الأمر الإداري', t(r.bookNumber)]);
-  if (sec) M.meta.push(['الجهة التابعة', sec]);
-  if (dstr) M.meta.push(['تاريخ الزيارة', day ? `${day} الموافق ${dstr}` : dstr]);
-  if (r.population) M.meta.push(['عدد النفوس المسجلة', normalizeDigits(r.population)]);
-  if (r.families) M.meta.push(['عدد العوائل المسجلة', normalizeDigits(r.families)]);
-
-  /* المقدمة */
-  M.intro = `استناداً إلى الخطة السنوية لشعبة تفتيش المؤسسات الصحية الحكومية، أجرى فريق من قسم التفتيش / شعبة تفتيش المؤسسات الصحية الحكومية ${t(r.visitType) || 'زيارة تفتيشية'} إلى ${kind} ${fac}${sec ? ' التابع إلى ' + sec : ''}${dstr ? ' بتاريخ ' + dstr : ''}، وتم ملاحظة الآتي:`;
-
-  /* المسؤولون */
-  const offs = (r.officials || []).map(o => [t(o.role), titleName(o.job, o.name)]).filter(o => o[1]);
-  if (offs.length) M.sections.push({ type: 'kv', heading: 'بيانات المؤسسة', rows: offs });
-
-  /* الملاك — فقرات لا جدول، بلا حساب نقص أو نسبة (بطلب صريح) */
-  const staffRows = Object.keys(r.staff || {}).map(k => {
-    const v = r.staff[k];
-    const tot = normalizeDigits(v.total).trim();
-    const act = normalizeDigits(v.actual).trim();
-    if (!tot && !act) return null;
-    return `${t(k)}: الملاك الكلي ${fmtNum(tot)} — الملاك الفعلي ${fmtNum(act)}`;
-  }).filter(Boolean);
-  if (staffRows.length) M.sections.push({ type: 'list', heading: 'الملاك الكلي والفعلي', items: staffRows, numbered: false });
-
-  /* أولاً: وحدة البصمة */
-  const fp = r.fp;
-  const fpRows = [];
-  const pm = titleName(fp.managerJob, fp.managerName);
-  if (pm) fpRows.push(['مسؤول البصمة', pm]);
-  const pd = titleName(fp.deputyJob, fp.deputyName);
-  if (pd) fpRows.push(['الرديف', pd]);
-  if (t(fp.devices)) fpRows.push(['عدد الأجهزة', t(fp.devices) + (t(fp.deviceState) ? ` (${t(fp.deviceState)})` : '')]);
-  if (t(fp.staff)) fpRows.push(['الكادر', t(fp.staff)]);
-  if (t(fp.adminCount) || t(fp.adminWhere)) fpRows.push(['الآدمن', [t(fp.adminCount), t(fp.adminWhere)].filter(Boolean).join(' — ')]);
-  if (t(fp.reportFreq) || t(fp.reportTo)) {
-    /* الصياغة المطلوبة: يُرسل موقف الحضور والبصمة (الدورية) إلى (الجهة) بانتظام */
-    const freq = t(fp.reportFreq) || 'يومياً';
-    const to = t(fp.reportTo) || 'الجهة المعنية';
-    fpRows.push(['آلية رفع الموقف', `يُرسل موقف الحضور والبصمة ${freq} إلى ${to} بانتظام.`]);
-  }
-  if (fpRows.length || t(fp.notes)) {
-    M.sections.push({ type: 'kv', heading: 'أولاً: وحدة البصمة', rows: fpRows, notes: t(fp.notes) ? [t(fp.notes)] : [] });
-  }
-
-  /* ثانياً: الإجراءات */
-  const procs = [];
-  (r.procedures || []).forEach(p => {
-    const d = fmtDate(p.date), dn = dayNameOf(p.date);
-    if (!d) return;
-    const src = t(p.source) || (kind === 'مستشفى' ? 'موظفي المستشفى' : 'موظفي المركز');
-    const when = dn ? `ليوم ${dn} الموافق ${d}` : `بتاريخ ${d}`;
-    let line;
-    if (p.kind === 'بصمة مفاجئة') line = `إجراء بصمة مفاجئة (تدقيق مفاجئ) لبيان حضور ${src} ${when}، وسحب الموقف ومطابقته مع مواقف الإجازات والسجلات ذات الصلة.`;
-    else if (p.kind === 'تدقيق مفاجئ') line = `إجراء تدقيق مفاجئ لبيان حضور ${src} ${when}، ومطابقته مع مواقف الإجازات والسجلات ذات الصلة.`;
-    else if (p.kind === 'سجل تواقيع' || p.kind === 'توقيع مفاجئ') line = `تم الاطلاع على سجل التواقيع الخاصة بحضور ${src} ${when}، وتدقيقه ومطابقته مع مواقف الإجازات والسجلات ذات الصلة.`;
-    else line = `تم سحب موقف البصمة الخاص بـ${src} ${when}، وتدقيقه ومطابقته مع مواقف الإجازات والسجلات ذات الصلة.`;
-    if (t(p.note)) line = line.replace(/\.$/, '') + '، ' + t(p.note).replace(/\.$/, '') + '.';
-    procs.push(line);
-  });
-  splitLines(r.procExtra).forEach(l => procs.push(l));
-  if (procs.length) M.sections.push({ type: 'list', heading: 'ثانياً: الإجراءات المتخذة خلال الزيارة', items: procs });
-
-  /* الملاحظات العامة */
-  const gen = (r.general || []).map(t).filter(Boolean);
-  if (gen.length) M.sections.push({ type: 'list', heading: 'الملاحظات العامة', items: gen });
-
-  /* مواقف البصمة */
-  const posBlocks = [];
-  (r.positions || []).forEach(p => {
-    const d = fmtDate(p.date), dn = t(p.day) || dayNameOf(p.date);
-    const when = dn ? `ليوم ${dn} الموافق ${d}` : `بتاريخ ${d}`;
-    let intro = t(p.intro);
-    if (!intro) {
-      const verb = t(p.verb) || 'بعد تدقيق';
-      intro = `${verb} ${t(p.kind) || 'موقف البصمة'} ${when}، تبين ما يلي:`;
-    }
-    const cats = [];
-    positionCats().forEach(c => {
-      const items = (p.items && p.items[c.k]) || [];
-      const list = items.map(it => titleName(it.job, it.name)).filter(Boolean)
-        .map((nm, i) => `${i + 1}. ${nm}${t(items[i].note) ? ' (' + t(items[i].note) + ')' : ''}`);
-      if (list.length) cats.push({ title: c.t, items: list });
-    });
-    if (cats.length) posBlocks.push({ intro, cats });
-    else posBlocks.push({ intro: intro + ' لم تُؤشر مخالفات.', cats: [] });
-  });
-  if (posBlocks.length) M.sections.push({ type: 'positions', heading: 'مواقف البصمة والحضور', blocks: posBlocks });
-
-  /* السجلات — فقرة لكل سجل: «اسم السجل: التقييم» */
-  const recLines = (r.records || [])
-    .filter(x => t(x.name))
-    .map(x => `${t(x.name)}: ${t(x.eval) || 'لم يُقيَّم'}`);
-  if (recLines.length) {
-    M.sections.push({ type: 'list', heading: 'ثالثاً: السجلات الإدارية', items: recLines, numbered: false });
-  }
-
-  /* متابعة التوصيات السابقة — فقرة لكل توصية */
-  const prev = (r.prevRecs || []).filter(x => t(x.text));
-  if (prev.length) {
-    M.sections.push({
-      type: 'list', heading: 'متابعة التوصيات السابقة', numbered: true,
-      items: prev.map(x => {
-        let s = t(x.text);
-        if (t(x.status)) s += ` — الحالة: ${t(x.status)}`;
-        if (t(x.note)) s += ` — ${t(x.note)}`;
-        return s;
-      }),
-    });
-  }
-
-  /* التوصيات */
-  const groups = (r.recGroups || []).filter(g => t(g.label) || (g.items || []).some(x => t(x)));
-  if (groups.length) {
-    M.sections.push({
-      type: 'recs', heading: 'التوصيات',
-      groups: groups.map(g => ({
-        letter: t(g.letter),
-        label: t(g.label),
-        intro: sub(t(g.intro)) || (t(g.label) ? `الإيعاز إلى ${t(g.label)} بما يلي:` : ''),
-        items: (g.items || []).map(sub).map(t).filter(Boolean),
-      })),
-    });
-  }
-
-  /* التوقيعات */
-  const sig = (r.signers || []).filter(s => t(s.name) || t(s.job));
-  M.signers = sig.map(s => ({ name: t(s.name), job: t(s.job), date: fmtDate(s.date) }));
-  M.footerNote = t(r.footerNote);
-  M.facility = fac; M.sector = sec; M.kind = kind;
-  M.visitDate = dstr; M.dayName = day;
-  return M;
-}
-function splitLines(s) {
-  return String(s || '').split(/\r?\n/).map(tidy).filter(Boolean);
-}
-
 /* ---------------------------------------------------------------- معاينة HTML */
-function renderPreview() {
-  const M = buildModel();
-  const H = [];
-  H.push('<div class="hdr">');
-  if (M.header.logo) H.push(`<img class="logo" src="${esc(M.header.logo)}" alt="">`);
-  [M.header.l1, M.header.l2, M.header.l3].filter(Boolean).forEach(l => H.push(`<div class="l">${esc(l)}</div>`));
-  H.push(`<h1>${esc(M.title)}</h1>`);
-  if (M.meta.length) H.push(`<div class="l">${M.meta.map(m => `<b>${esc(m[0])}:</b> ${esc(m[1])}`).join(' &nbsp;|&nbsp; ')}</div>`);
-  H.push('</div>');
-  H.push(`<p>${esc(M.intro)}</p>`);
-  if (M.sections.some(s => s.heading === 'بيانات المؤسسة')) { /* already ordered */ }
-
-  M.sections.forEach(s => {
-    H.push(`<h2>${esc(s.heading)}</h2>`);
-    if (s.type === 'kv') {
-      (s.rows || []).forEach(r => H.push(`<p><b>${esc(r[0])}:</b> ${esc(r[1])}</p>`));
-      (s.notes || []).forEach(n => H.push(`<p>${esc(n)}</p>`));
-    } else if (s.type === 'list') {
-      if (s.numbered === false) {
-        s.items.forEach(i => H.push(`<p>${esc(i)}</p>`));
-      } else {
-        H.push('<ol>' + s.items.map(i => `<li>${esc(i)}</li>`).join('') + '</ol>');
-      }
-    } else if (s.type === 'positions') {
-      s.blocks.forEach(b => {
-        H.push(`<p>${esc(b.intro)}</p>`);
-        b.cats.forEach(c => {
-          H.push(`<p style="margin:6px 0 2px"><b>${esc(c.title)}:</b></p>`);
-          H.push('<ul>' + c.items.map(i => `<li>${esc(i)}</li>`).join('') + '</ul>');
-        });
-      });
-    } else if (s.type === 'recs') {
-      s.groups.forEach(g => {
-        const lbl = [g.letter ? g.letter + '/' : '', g.intro || g.label].filter(Boolean).join(' ');
-        if (lbl) H.push(`<p><b>${esc(lbl.replace(/\/\s*$/, '/'))}</b></p>`);
-        if (g.items.length) H.push('<ol>' + g.items.map(i => `<li>${esc(i)}</li>`).join('') + '</ol>');
-      });
-    }
-  });
-
-  if (M.signers.length) {
-    H.push('<h2>فريق التفتيش</h2><div class="sign">');
-    M.signers.forEach(s => H.push(`<div><b>${esc(s.name || '—')}</b><br>${esc(s.job || '')}${s.date ? '<br>' + esc(s.date) : ''}<br><br>التوقيع: ..................</div>`));
-    H.push('</div>');
-  }
-  if (M.footerNote) H.push(`<p class="foot">${esc(M.footerNote)}</p>`);
-  $('#docPreview').innerHTML = H.join('');
-  $('#previewMeta').textContent = [M.facility, M.visitDate, M.visitType || state.report.visitType].filter(Boolean).join(' · ');
-}
 
 /* =============================================================================
-   تصدير Word (.docx) — مبني على docx UMD
-   ملاحظات تقنية مؤكَّدة بالاختبار:
-     • يجب استخدام Packer.toBlob() في المتصفح؛ toBuffer() يفشل.
-     • التقرير كله فقرات — لا جداول إطلاقاً (بطلب صريح).
+   النطاق المشترك لمنطق التقرير
+   -----------------------------------------------------------------------------
+   منطق التقرير موزّع على ملفات مستقلة لتسهيل التحرير عليها:
+     report-model.js      بناء نموذج التقرير
+     report-preview.js    المعاينة كـ HTML
+     report-clipboard.js  النسخ إلى الحافظة
+     report-word.js       تصدير Word
+     report-print.js      الطباعة
+
+   هذا النطاق يمنحها الأدوات والحالة من app.js، ثم تستعملها app.js عبر NS.
    ============================================================================= */
-const PAGE_W = 11906, PAGE_H = 16838, MARGIN = 1440;
-const CONTENT_W = PAGE_W - MARGIN * 2; /* 9026 — يُستخدم لحساب العروض إن لزم */
+window.ADMHReport = window.ADMHReport || {};
 
-function exportWord() {
-  const fail = validateReport();
-  if (fail) { toast(fail, 'err', 3800); showView('report'); return Promise.resolve(); }
-  const D = window.docx;
-  if (!D) { toast('تعذّر تحميل مولّد Word', 'err', 4000); return Promise.resolve(); }
+/* الأدوات والدوال المشتركة — تُستهلك من الملفات المستقلة */
+window.ADMHReport.util = {
+  esc,
+  tidy,
+  fmtDate,
+  dayNameOf,
+  fmtNum,
+  normalizeDigits,
+  todayISO,
+  safeName,
+  download,
+  toast,
+  autoTitle,
+  titleName,
+  positionCats,
+  updateTitle,
+  validateReport,
+};
 
-  const M = buildModel();
-  const fontName = state.settings.font || 'Simplified Arabic';
-  const baseHalf = Math.round((parseFloat(state.settings.fontSize) || 12) * 2);
-  const F = { name: fontName, hint: 'cs' };
+/* الحالة: تُقرأ عند الطلب حتى تبقى محدَّثة دائماً */
+window.ADMHReport.getState = function () { return state; };
+window.ADMHReport.getSettings = function () { return state.settings; };
 
-  /* لا حاجة لأي أصناف جداول: التقرير كله فقرات */
-  const {
-    Document, Packer, Paragraph, TextRun,
-    AlignmentType, HeadingLevel, BorderStyle,
-    PageNumber, Footer,
-  } = D;
-
-  /* تباعد الأسطر — يتبع نمط التقارير الأصلية: w:line=276 w:lineRule=auto (~1.15)
-     بدون w:lineRule صريح يفسّر بعض العارضين القيمة كـ«ضبط دقيق» فيتضاعف التباعد. */
-  const LINE = 276;
-  /* مسافة بادئة معلّقة للبنود المرقّمة: يُسحب الرقم إلى داخل الهامش فيبقى ظاهراً */
-  const LIST_HANG = { start: 284, hanging: 284 };
-
-  const para = (text, o) => {
-    o = o || {};
-    const runs = [];
-    if (o.runs) runs.push(...o.runs);
-    else runs.push(new TextRun({ text: String(text == null ? '' : text), rightToLeft: true, bold: !!o.bold, italics: !!o.italics, color: o.color, size: o.size || baseHalf, font: F }));
-    return new Paragraph({
-      bidirectional: true,
-      alignment: o.align || AlignmentType.RIGHT,
-      heading: o.heading,
-      indent: o.indent,
-      spacing: {
-        before: o.before == null ? 0 : o.before,
-        after: o.after == null ? 60 : o.after,
-        line: o.line || LINE,
-        lineRule: 'auto',
-      },
-      border: o.border,
-      children: runs,
-    });
-  };
-  /* لا جداول في ملف Word: كل البيانات تُصاغ فقرات. */
-
-  const children = [];
-
-  /* الترويسة — الشعار (يُدمج فعلياً في الملف إن وُجد) */
-  const logoData = dataUrlToBytes(M.header.logo);
-  if (logoData && D.ImageRun) {
-    try {
-      const lw = state.settings.logoW || 120, lh = state.settings.logoH || 90;
-      const scale = Math.min(110 / lw, 78 / lh, 2.2);
-      children.push(new Paragraph({
-        bidirectional: true,
-        alignment: AlignmentType.CENTER,
-        spacing: { after: 40 },
-        children: [new D.ImageRun({
-          data: logoData.bytes,
-          transformation: { width: Math.max(20, Math.round(lw * scale)), height: Math.max(20, Math.round(lh * scale)) },
-          type: logoData.type,
-        })],
-      }));
-    } catch (e) { console.warn('logo embed failed', e); }
-  }
-  [M.header.l1, M.header.l2, M.header.l3].filter(Boolean).forEach(l =>
-    children.push(para(l, { align: AlignmentType.CENTER, size: baseHalf - 2, color: '555555', after: 10 })));
-  children.push(para(M.title, { align: AlignmentType.CENTER, size: baseHalf + 8, bold: true, color: '004D40', before: 80, after: 40 }));
-  if (M.meta.length) children.push(para(M.meta.map(m => `${m[0]}: ${m[1]}`).join('   |   '), { align: AlignmentType.CENTER, size: baseHalf - 2, color: '444444', after: 60 }));
-  children.push(new Paragraph({
-    bidirectional: true, spacing: { after: 100, line: LINE, lineRule: 'auto' },
-    border: { bottom: { style: BorderStyle.DOUBLE, size: 6, color: '004D40', space: 4 } },
-    children: [new TextRun({ text: '', size: 2, font: F })],
-  }));
-
-  /* المقدمة */
-  children.push(para(M.intro, { align: AlignmentType.JUSTIFIED, after: 100 }));
-
-  /* الأقسام */
-  M.sections.forEach(s => {
-    children.push(para(s.heading, { heading: HeadingLevel.HEADING_2, size: baseHalf + 2, bold: true, color: '004D40', before: 180, after: 70, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '00796B', space: 3 } } }));
-    if (s.type === 'kv') {
-      (s.rows || []).forEach(r => children.push(para([r[0] ? r[0] + ': ' : '', r[1]].join(''), { after: 20 })));
-      (s.notes || []).forEach(n => children.push(para(n, { after: 20 })));
-    } else if (s.type === 'list') {
-      /* numbered === false يعني بنوداً غير مرقّمة (مثل سطور الملاك) */
-      s.items.forEach((it, i) => children.push(
-        s.numbered === false
-          ? para(it, { after: 30 })
-          : para(`${i + 1}- ${it}`, { after: 40, indent: LIST_HANG })
-      ));
-    } else if (s.type === 'positions') {
-      s.blocks.forEach(b => {
-        children.push(para(b.intro, { after: 40 }));
-        b.cats.forEach(c => {
-          children.push(para(c.title + ':', { bold: true, after: 20, before: 60 }));
-          c.items.forEach(it => children.push(para(it, { after: 10, indent: { start: 284 } })));
-        });
-      });
-    } else if (s.type === 'recs') {
-      s.groups.forEach(g => {
-        const lbl = [g.letter ? g.letter + '/' : '', g.intro || g.label].filter(Boolean).join(' ');
-        if (lbl) children.push(para(lbl.replace(/\/\s*$/, '/'), { bold: true, before: 90, after: 30 }));
-        g.items.forEach((it, i) => children.push(para(`${i + 1}- ${it}`, { after: 40, indent: LIST_HANG })));
-      });
-    }
-  });
-
-  /* التوقيعات */
-  if (M.signers.length) {
-    children.push(para('فريق التفتيش', { heading: HeadingLevel.HEADING_2, size: baseHalf + 2, bold: true, color: '004D40', before: 240, after: 90 }));
-    M.signers.forEach(s => {
-      children.push(para(s.name || '—', { bold: true, after: 20 }));
-      const sub = [s.job, s.date].filter(Boolean).join(' — ');
-      if (sub) children.push(para(sub, { size: baseHalf - 2, color: '555555', after: 20 }));
-      children.push(para('التوقيع: ..................................', { after: 160, color: '444444' }));
-    });
-  }
-  if (M.footerNote) children.push(para(M.footerNote, { align: AlignmentType.CENTER, before: 160, size: baseHalf - 2, color: '555555' }));
-
-  const doc = new Document({
-    creator: 'نظام التقارير التفتيشية',
-    title: M.title,
-    description: 'تقرير زيارة تفتيشية',
-    styles: {
-      default: {
-        document: { run: { font: F, size: baseHalf, rightToLeft: true } },
-        heading1: { run: { font: F, size: baseHalf + 8, bold: true, color: '004D40', rightToLeft: true } },
-        heading2: { run: { font: F, size: baseHalf + 2, bold: true, color: '004D40', rightToLeft: true } },
-      },
-    },
-    sections: [{
-      properties: {
-        page: { size: { width: PAGE_W, height: PAGE_H }, margin: { top: MARGIN, right: MARGIN, bottom: MARGIN, left: MARGIN } },
-        bidi: true,
-      },
-      footers: {
-        default: new Footer({
-          children: [new Paragraph({
-            bidirectional: true, alignment: AlignmentType.CENTER,
-            children: [
-              new TextRun({ text: 'صفحة ', rightToLeft: true, size: baseHalf - 4, font: F, color: '777777' }),
-              new TextRun({ children: [PageNumber.CURRENT], size: baseHalf - 4, font: F, color: '777777' }),
-              new TextRun({ text: ' من ', rightToLeft: true, size: baseHalf - 4, font: F, color: '777777' }),
-              new TextRun({ children: [PageNumber.TOTAL_PAGES], size: baseHalf - 4, font: F, color: '777777' }),
-            ],
-          })],
-        }),
-      },
-      children,
-    }],
-  });
-
-  return Packer.toBlob(doc).then(blob => {
-    const fn = `تقرير_${safeName(M.facility)}_${(state.report.visitDate || todayISO()).replace(/-/g, '')}.docx`;
-    download(blob, fn);
-    toast('تم تصدير ملف Word', 'ok');
-  }).catch(err => {
-    console.error(err);
-    toast('فشل توليد الملف: ' + (err && err.message ? err.message : err), 'err', 5000);
-  });
-}
+/* غلاف التقرير: ينفّذ الملف المستقل مع معالجة الخطأ */
+window.ADMHReport.run = function (name, fn) {
+  if (typeof fn !== 'function') { toast('وحدة ' + name + ' غير محمّلة', 'err'); return; }
+  return fn();
+};
 
 /* ---------------------------------------------------------------- التحقق */
 function validateReport() {
@@ -2602,8 +2258,14 @@ function init() {
   });
   console.log(`نظام التقارير التفتيشية v${APP_VERSION} — جاهز`);
 }
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-else init();
+/* لا نُشغّل التطبيق هنا: يجب أن تُحمَّل ملفات التقرير المستقلة أولاً
+   (report-model.js وما بعدها). آخر ملف منها يستدعي ADMHReport.boot(). */
+window.ADMHReport = window.ADMHReport || {};
+window.ADMHReport.boot = function () {
+  if (window.ADMHReport.__booted) return;      /* لا تُشغّله مرتين */
+  window.ADMHReport.__booted = true;
+  init();
+};
 
 /* ------------------------------------------------------------------ التصدير
    يُستخدم للاختبار الآلي، ويوفّر واجهة برمجية بسيطة للتشغيل من الخارج. */
@@ -2611,7 +2273,7 @@ const API = {
   APP_VERSION,
   constants: {
     RECORD_PRESETS, RECORD_ADDONS, RECORD_ROWS, RECO_PRESETS, GENERAL_PRESETS,
-    PAGE_W, PAGE_H, MARGIN, CONTENT_W,
+    /* أبعاد صفحة A4 انتقلت إلى report-word.js: ADMHReport.PAGE */
   },
   recoGroups,
   buildOptionsFile, downloadOptionsFile,
@@ -2624,11 +2286,16 @@ const API = {
   positionCats,
   state,
   init, loadAll, blankReport, blankSettings, migrate, defaultLibrary,
-  buildModel, renderPreview, exportWord, validateReport,
+  buildModel: (...a) => ADMHReport.run('بناء التقرير', () => ADMHReport.buildModel(...a)),
+  renderPreview: (...a) => ADMHReport.run('المعاينة', () => ADMHReport.renderPreview(...a)),
+  exportWord: (...a) => ADMHReport.run('تصدير Word', () => ADMHReport.exportWord(...a)),
+  printReport: (...a) => ADMHReport.run('الطباعة', () => ADMHReport.printReport(...a)),
+  copyReport: (...a) => ADMHReport.run('النسخ', () => ADMHReport.copyReport(...a)),
+  validateReport,
   renderAll, showView, saveToArchive, saveDraft, saveSettings,
   bindButtons, bindForm, verifyBindings, applyScope,
   tidy, fmtDate, dayNameOf, titleName, normalizeDigits, autoTitle, updateTitle, fmtNum,
-  dataUrlToBytes, uid, safeName,
+  uid, safeName,
   exportArchiveJSON, importArchiveJSON,
   sync, initSync, renderSyncUI, syncNow,
 };
