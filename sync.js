@@ -190,13 +190,39 @@
      --------------------------------------------------------------------------- */
   let gisClient = null;      /* عميل الرمز المُهيَّأ */
   let gisClientCid = '';     /* المعرّف الذي بُني به */
+  let gisClientMode = '';    /* 'fedcm' أو 'popup-classic' — للتشخيص */
   let prepPromise = null;    /* وعد التجهيز المسبق */
   let gisLastResponse = null;/* آخر استجابة من Google — للتشخيص */
   let gisLastError = null;   /* آخر خطأ من Google Identity — للتشخيص */
+
+  /* هل تفضّل هذا الجهاز نافذة الدخول الكلاسيكية (بدل FedCM)؟
+     يُضبط تلقائياً عند فشل وضعٍ ما، ويُحفظ على الجهاز. */
+  let popupClassicPreferred = false;
+  try { popupClassicPreferred = localStorage.getItem('admh.sync.gismode') === 'classic'; } catch (e) {}
+  function rememberGisMode(mode) {
+    if (mode === 'classic') popupClassicPreferred = true;
+    try { localStorage.setItem('admh.sync.gismode', mode); } catch (e) {}
+    /* العميل الحالي لم يعد مطابقاً للتفضيل الجديد */
+    gisClient = null; gisClientCid = '';
+  }
+
+  /** هل نحن داخل تطبيق مثبَّت على الشاشة الرئيسية (PWA standalone)؟
+   *  FedCM لا يعمل في هذا الوضع على أندرويد، فيسقط Chrome إلى إعادة
+   *  توجيه كاملة لا تعود بجلسة — أشهر سبب لفشل الدخول على الهاتف. */
+  function isStandalone() {
+    try {
+      if (global.matchMedia && global.matchMedia('(display-mode: standalone)').matches) return true;
+      if (window.navigator.standalone === true) return true;      /* iOS */
+    } catch (e) {}
+    return false;
+  }
+
   function gisDiagnostics() {
     return {
       response: gisLastResponse,
       error: gisLastError,
+      mode: gisClientMode,
+      standalone: isStandalone(),
     };
   }
 
@@ -209,20 +235,53 @@
       e.code = 'gis/not-ready';
       throw e;
     }
-    gisClientCid = cid;
-    gisClient = oauth2.initTokenClient({
-      client_id: cid,
-      scope: 'openid email profile',
-      /* نضع نداءً افتراضياً يُستبدل عند كل محاولة */
-      callback: () => {},
-      /* -----------------------------------------------------------------
-         FedCM: واجهة الهوية الفيدرالية.
-         كروم يحجب كوكيز الطرف الثالث، وهذا يمنع Google من إكمال تدفّق
-         النافذة فيغيب رمز الهوية. FedCM يعمل بلا كوكيز طرف ثالث إطلاقاً،
-         وهو الحل الرسمي من Google، ويدعمه كروم على أندرويد.
-         ----------------------------------------------------------------- */
-      use_fedcm_for_prompt: true,
-    });
+    /* -------------------------------------------------------------------------
+       خياران متدرّجان — لأن سلوك «إعادة التوجيه بدل النافذة» يختلف بين
+       الحاسوب والهاتف:
+
+       1) FedCM (use_fedcm_for_prompt): الوضع الحديث. لا يحتاج كوكيز الطرف
+          الثالث، لكنه **لا يعمل داخل تطبيقات الويب المثبَّتة (PWA/standalone)**
+          في أندرويد — وعند عدم عمله يسلك Chrome مسار إعادة التوجيه الكاملة،
+          فتظهر صفحة Google داخل الموقع نفسه ولا تصل النتيجة. هذا مطابقةً
+          لما يحدث على الهاتف (خصوصاً عند الفتح من أيقونة الشاشة الرئيسية).
+
+       2) popupclassic: الوضع الكلاسيكي — يفتح نافذة/تبويباً من Google ويعيد
+          الرمز إلى النداء مباشرةً، بلا اعتماد على التخزين بين النطاقات.
+
+       لذلك: الحاسوب ← FedCM أولاً؛ الهاتف ← الكلاسيكي أولاً ثم FedCM احتياطاً.
+       تُجرَّب الخيارات بالترتيب حتى يُقبل أحدها، ويُتذكَّر القبول على الجهاز.
+       ------------------------------------------------------------------------- */
+    const isMobileUA = /Android|iPhone|iPad|iPod|Mobile|Opera Mini|IEMobile/i
+      .test((global.navigator && global.navigator.userAgent) || '');
+    /* تطبيقات الويب المثبَّتة (PWA): FedCM لا يعمل فيها على أندرويد،
+       فنجرب الكلاسيكي أولاً. */
+    const fedcmFirst = !isMobileUA && !isStandalone() && !popupClassicPreferred;
+    const opts = fedcmFirst
+      ? [{ use_fedcm_for_prompt: true }, {}]
+      : [{}, { use_fedcm_for_prompt: true }];
+
+    let lastErr = null;
+    for (const extra of opts) {
+      try {
+        gisClient = oauth2.initTokenClient(Object.assign({
+          client_id: cid,
+          scope: 'openid email profile',
+          /* نضع نداءً افتراضياً يُستبدل عند كل محاولة */
+          callback: () => {},
+        }, extra));
+        gisClientCid = cid;
+        gisClientMode = fedcmFirst ? 'fedcm' : 'popup-classic';
+        break;
+      } catch (e) {
+        lastErr = e;
+        gisClient = null;
+      }
+    }
+    if (!gisClient) {
+      const e = new Error('تعذّر تجهيز عميل Google Identity: ' + ((lastErr && lastErr.message) || ''));
+      e.code = 'gis/init-failed';
+      throw e;
+    }
     return gisClient;
   }
 
@@ -325,8 +384,50 @@
       let done = false;
       const finish = (fn, v) => { if (!done) { done = true; fn(v); } };
 
+      /* -----------------------------------------------------------------------
+         مراقبة النافذة: في الوضع الكلاسيكي يفتح Google نافذة/تبويباً.
+         إن فُتحت ثم أُغلقت بلا أي استجابة، أو لم تُفتح أصلاً، فلا فائدة من
+         انتظار المهلة الطويلة — ننهي المحاولة مبكراً برسالة واضحة وبسبب حقيقي.
+         ----------------------------------------------------------------------- */
+      const watchedMode = gisClientMode;
+      let popupRef = null;       /* مرجع النافذة التي يفتحها Google */
+      let restoreOpen = null;    /* لإرجاع window.open بعد انتهاء المحاولة */
+      try {
+        if (global.window && typeof global.window.open === 'function') {
+          const origOpen = global.window.open;
+          restoreOpen = () => { try { global.window.open = origOpen; } catch (e) {} };
+          global.window.open = function (u, n, f) {
+            const w = origOpen.apply(this, arguments);
+            if (w && !popupRef) popupRef = w;
+            return w;
+          };
+        }
+      } catch (e) {}
+
+      let wakeTimer = null, timer = null;
+      const cleanupWatchers = () => {
+        if (wakeTimer) clearInterval(wakeTimer);
+        if (timer) clearTimeout(timer);
+        if (restoreOpen) { restoreOpen(); restoreOpen = null; }
+      };
+
+      wakeTimer = setInterval(() => {
+        if (done) { cleanupWatchers(); return; }
+        /* المستخدم رجع إلى التطبيق والنافذة مغلقة ولم تصل استجابة = فشل صامت */
+        if (popupRef && popupRef.closed && document.visibilityState === 'visible') {
+          cleanupWatchers();
+          if (watchedMode === 'fedcm') rememberGisMode('classic');
+          const e = new Error(
+            'أُغلقَت صفحة الدخول بلا نتيجة على هذا الجهاز.\n' +
+            'جرّب مرة أخرى — سيستخدم النظام طريقة النافذة التقليدية.');
+          e.code = 'gis/popup-closed-no-response';
+          finish(reject, e);
+        }
+      }, 700);
+
       /* مهلة واسعة: المستخدم قد يتأخر في اختيار الحساب */
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
+        cleanupWatchers();
         finish(reject, (() => {
           const e = new Error('لم يكتمل الدخول. أعد المحاولة واختر حسابك.');
           e.code = 'auth/timeout';
@@ -336,14 +437,32 @@
 
       /* نُسند النداء ثم نطلب الرمز — بلا أي انتظار */
       gisClient.callback = resp => {
-        clearTimeout(timer);
+        cleanupWatchers();
         if (!resp || resp.error) {
+          const errName = (resp && resp.error) || 'cancelled';
+          /* خطأ popup_closed في وضع FedCM يعني أن المتصفح لا يستطيع إظهار
+             واجهة الهوية هنا (تطبيق مثبَّت، كوكيز محجوبة، متصفح قديم) —
+             فنبدّل الطريقة للجهاز قبل إعادة المحاولة. */
+          if (/popup|closed/i.test(errName) && watchedMode === 'fedcm') {
+            rememberGisMode('classic');
+          }
           const e = new Error(resp && resp.error_description
             ? resp.error_description
             : 'لم يتم اختيار حساب Google.');
-          e.code = 'auth/' + ((resp && resp.error) || 'cancelled');
+          /* popup_failed_to_open: المتصفح لم يستطع فتح النافذة (شائع على
+             الهاتف: Pop-up blocker أو وضع PWA). نوّصع الرمز حتى تلتقطه
+             طبقة إعادة المحاولة بالوضع الآخر. */
+          e.code = (errName === 'popup_failed_to_open' || errName === 'popup_failed_to_open.')
+            ? 'auth/popup-blocked'
+            : 'auth/' + String(errName).replace(/_/g, '-');
           finish(reject, e);
           return;
+        }
+        /* نجح هذا الوضع على هذا الجهاز — نتذكره */
+        if (watchedMode === 'popup-classic' && popupClassicPreferred !== true) {
+          try { localStorage.setItem('admh.sync.gismode', 'classic'); } catch (e) {}
+        } else if (watchedMode === 'fedcm') {
+          try { localStorage.setItem('admh.sync.gismode', 'fedcm'); } catch (e) {}
         }
         /* -----------------------------------------------------------------
            نحتاج رمزاً واحداً على الأقل: رمز الهوية أو رمز الوصول.
@@ -389,11 +508,11 @@
           fb.auth.signInWithCredential(cred).then(c => {
             finish(resolve, { user: (c && c.user) || c });
           }).catch(err => {
-            clearTimeout(timer);
+            cleanupWatchers();
             finish(reject, err);
           });
         } catch (convErr) {
-          clearTimeout(timer);
+          cleanupWatchers();
           finish(reject, convErr);
         }
       };
@@ -401,7 +520,7 @@
       try {
         gisClient.requestAccessToken();
       } catch (err) {
-        clearTimeout(timer);
+        cleanupWatchers();
         /* نسجّل سبب GIS الحقيقي — يظهر في صفحة الفحص */
         gisLastError = {
           code: 'gis/request-threw',
@@ -622,13 +741,44 @@
         /* مسار Firebase فرصة أخيرة، وإن فشل نُعيد سبب Google Identity */
         const fallback = () => signInWithFirebaseGoogle().catch(() => { throw gisErr; });
 
+        /* -------------------------------------------------------------
+           الفشل من نوع «طريقة العرض لا تعمل هنا» (نافذة أُغلقت بلا نتيجة،
+           محجوبة، أو مهلة): نُعيد المحاولة **بطريقة GIS الأخرى** فوراً —
+           تبديل FedCM ↔ النافذة الكلاسيكية يحلّ أغلب حالات فشل الدخول على
+           الهاتف. الطلب يقع داخل سلسلة نداءات زر المستخدم نفسه، فيبقى
+           تفعيل النقرة قائماً. فإن فشلت الطريقة الأخرى نلجأ إلى Firebase.
+           ------------------------------------------------------------- */
+        const displayFailure =
+          code === 'gis/popup-closed-no-response' ||
+          code === 'auth/popup_blocked' || code === 'auth/popup-blocked' ||
+          code === 'auth/popup_closed' || code === 'auth/popup-closed-by-user' ||
+          code === 'auth/cancelled-popup-request' ||
+          code === 'auth/timeout';
+
+        const userCancelled =
+          code === 'auth/cancelled' || code === 'auth/access_denied';
+
         const retryable =
           code === 'gis/no-token' || code === 'gis/no-id-token' ||
           code === 'gis/init-failed' || code === 'gis/not-ready' ||
-          code === 'auth/timeout' || code === 'auth/cancelled' ||
-          code === 'auth/access_denied' || code === 'auth/popup_closed' ||
           code === 'auth/operation-not-supported-in-this-environment' ||
-          code === 'auth/internal-error' || code === 'auth/popup-blocked';
+          code === 'auth/internal-error' ||
+          displayFailure || userCancelled;
+
+        if (displayFailure && !userCancelled && !fb.auth.currentUser) {
+          try { ensureGisClient(cid); } catch (e) {}   /* يُعاد البناء بالوضع الجديد */
+          if (gisClient) {
+            return startGisRequest().catch(retryErr => {
+              gisLastError = {
+                code: (retryErr && retryErr.code) || '',
+                message: (retryErr && retryErr.message) || String(retryErr),
+                response: gisLastResponse,
+              };
+              return fallback();
+            });
+          }
+        }
+
         if (retryable) return fallback();
 
         /* خطأ حقيقي من Google Identity: نُظهره كما هو */
@@ -1014,7 +1164,12 @@
       return 'أُغلقت نافذة الدخول قبل إتمام العملية. أعد المحاولة.';
     }
     if (code === 'auth/popup-blocked') {
-      return 'المتصفح منع نافذة الدخول — اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.';
+      return 'المتصفح منع نافذة الدخول — اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.\n' +
+             'على الهاتف: Chrome ← ⋮ ← إعدادات المواقع لهذا النطاق ← النوافذ المنبثقة ← السماح.';
+    }
+    if (code === 'gis/popup-closed-no-response') {
+      return 'لم تكتمل نافذة الدخول على هذا الجهاز. النظام بدّل طريقة الدخول تلقائياً — ' +
+             'اضغط الزر مرة أخرى وستعمل إن شاء الله.';
     }
     if (code === 'auth/too-many-requests') {
       return 'محاولات كثيرة فاشلة. انتظر بضع دقائق ثم أعد المحاولة.';
