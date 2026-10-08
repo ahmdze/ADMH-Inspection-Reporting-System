@@ -229,11 +229,15 @@ const check = (n, c, d) => { if (c) { pass++; console.log('  ✓ ' + n); } else 
     check('البريد صحيح', cred.email === 'gis@gmail.com', cred.email);
   }
   {
-    /* إلغاء المستخدم: لا نُظهر خطأً غامضاً، وننتقل إلى مسار Firebase */
+    /* إلغاء المستخدم **ليس عطلاً**: لا نافذة ثانية ولا انتقال إلى Firebase.
+       نُظهر له رسالة واضحة تطلب إعادة المحاولة. */
     const e = makeEnv({ gis: 'cancel', popup: 'ok', noGis: false });
-    const cred = await e.S.connect();
-    check('إلغاء GIS ينتقل إلى مسار Firebase', e.calls.popup === 1, e.calls);
-    check('وينجح في النهاية', !!cred.email, cred.email);
+    let err = null;
+    try { await e.S.connect(); } catch (x) { err = x; }
+    check('الإلغاء لا يفتح نافذة Firebase ثانية', e.calls.popup === 0, e.calls);
+    check('ولا يعيد التوجيه', e.calls.redirect === 0, e.calls);
+    check('ويُظهر رسالة إلغاء واضحة',
+      !!(err && /أُلغيت|إلغاء/.test(err.message)), err && err.message);
   }
   {
     /* Google أعاد access_token بلا id_token — وهو الشائع على الهاتف.

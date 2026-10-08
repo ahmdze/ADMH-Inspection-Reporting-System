@@ -153,11 +153,11 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
                   'report-word.js', 'report-print.js'];
     fetch('app.js', { cache: 'no-store' }).then(r => r.text()).then(t => {
       const v = (/APP_VERSION\s*=\s*'([^']+)'/.exec(t) || [])[1] || '؟';
-      if (v === '11.1.0') {
+      if (v === '12.0.0') {
         line('#envChecks', 'ok', 'نسخة النظام', v + ' — حديثة');
       } else {
         warnings++;
-        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 11.1.0 — حدّث الموقع وامسح ذاكرة المتصفح');
+        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 12.0.0 — حدّث الموقع وامسح ذاكرة المتصفح');
       }
     }).catch(() => {});
 
@@ -240,6 +240,26 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
           if (dg && dg.error && dg.error.code) {
             line('#envChecks', 'warn', 'آخر خطأ من Google Identity',
               dg.error.code + ' — ' + String(dg.error.message || '').split('\n')[0]);
+          }
+          if (dg && dg.mode) {
+            line('#envChecks', 'ok', 'طريقة عرض Google',
+              dg.mode + (dg.standalone ? ' · تطبيق مثبَّت' : ' · متصفح عادي') +
+              ' · العميل جاهز: ' + (dg.ready ? 'نعم' : 'لا'));
+          }
+          /* سجل الخطوات: يُبيّن أين توقف المسار بالضبط */
+          if (dg && dg.trace && dg.trace.length) {
+            line('#envChecks', 'ok', 'سجل خطوات الدخول',
+              '(آخر ' + dg.trace.length + ' خطوة — التفاصيل أدناه)');
+            const wrap = document.createElement('div');
+            wrap.style.cssText = 'margin:6px 0 2px;padding:8px 10px;border:1px solid var(--border,#b9c4cc);border-radius:8px';
+            dg.trace.forEach(function (s) {
+              const row = document.createElement('div');
+              row.style.cssText = 'font-family:ui-monospace,Consolas,monospace;font-size:.78em;direction:ltr;text-align:left;line-height:1.7;word-break:break-all';
+              row.textContent = String(s.t).padStart(6, ' ') + '  ' + s.step + (s.detail ? '  ·  ' + s.detail : '');
+              wrap.appendChild(row);
+            });
+            const host = document.getElementById('envChecks');
+            if (host) host.appendChild(wrap);
           }
         } catch (e) {}
       } else {

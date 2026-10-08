@@ -195,6 +195,26 @@
   let gisLastResponse = null;/* آخر استجابة من Google — للتشخيص */
   let gisLastError = null;   /* آخر خطأ من Google Identity — للتشخيص */
 
+  /* ---------------------------------------------------------------------------
+     سجل خطوات مسار Google Identity.
+     ---------------------------------------------------------------------------
+     أداة تشخيص: تُسجّل كل خطوة، ليتّضح أين يتوقف المسار بالضبط. تُعرض في
+     صفحة الفحص، ولا تُرسل إلى أي مكان — محليّة بالكامل.
+     --------------------------------------------------------------------------- */
+  const gisTraceLog = [];
+  function gisTrace(step, detail) {
+    gisTraceLog.push({
+      t: (typeof performance !== 'undefined' && performance.now)
+        ? Math.round(performance.now()) : Date.now(),
+      step: step,
+      detail: detail == null ? '' : String(detail).slice(0, 220),
+    });
+    if (gisTraceLog.length > 40) gisTraceLog.shift();   /* نُبقي آخر ٤٠ خطوة */
+    return gisTraceLog;
+  }
+  function gisTraceAll() { return gisTraceLog.slice(); }
+  function gisTraceClear() { gisTraceLog.length = 0; return gisTraceLog; }
+
   /* هل تفضّل هذا الجهاز نافذة الدخول الكلاسيكية (بدل FedCM)؟
      يُضبط تلقائياً عند فشل وضعٍ ما، ويُحفظ على الجهاز. */
   let popupClassicPreferred = false;
@@ -223,6 +243,9 @@
       error: gisLastError,
       mode: gisClientMode,
       standalone: isStandalone(),
+      trace: gisTraceAll(),
+      ready: googleReady(),
+      hasClient: hasGoogleClientId(),
     };
   }
 
@@ -278,26 +301,37 @@
       }
     }
     if (!gisClient) {
+      gisTrace('client:fail', (lastErr && lastErr.message) || 'فشل initTokenClient');
       const e = new Error('تعذّر تجهيز عميل Google Identity: ' + ((lastErr && lastErr.message) || ''));
       e.code = 'gis/init-failed';
       throw e;
     }
+    gisTrace('client:ok', 'الوضع=' + gisClientMode + ' · fedcm=' + (extraHasFedcm(opts)));
     return gisClient;
+  }
+
+
+  /** هل أحد خيارات التهيئة يفعّل FedCM؟ (للتشخيص فقط) */
+  function extraHasFedcm(opts) {
+    try { return !!(opts && opts[0] && opts[0].use_fedcm_for_prompt); } catch (e) { return false; }
   }
 
   /** تجهيز مسبق: Firebase + مكتبة Google + عميل الرمز */
   function prepareGoogle() {
     const cid = googleClientId();
-    if (!cid) return Promise.resolve(false);
+    if (!cid) { gisTrace('prepare', 'لا معرّف عميل'); return Promise.resolve(false); }
     if (prepPromise) return prepPromise;
+    gisTrace('prepare:start', 'بدء تجهيز Firebase ومكتبة Google');
     prepPromise = initFirebase()
       .then(() => loadGis())
       .then(() => {
         /* نبني العميل فعلاً — لا نكتفي بتحميل المكتبة */
         ensureGisClient(cid);
+        gisTrace('prepare:ok', 'العميل جاهز — الوضع: ' + gisClientMode);
         return true;
       })
       .catch(err => {
+        gisTrace('prepare:fail', (err && err.message) || String(err));
         gisLastError = {
           code: (err && err.code) || 'gis/prepare-failed',
           message: (err && err.message) ? err.message : String(err),
@@ -438,6 +472,9 @@
       /* نُسند النداء ثم نطلب الرمز — بلا أي انتظار */
       gisClient.callback = resp => {
         cleanupWatchers();
+        gisTrace('response', resp
+          ? ('keys=' + Object.keys(resp).join(',') + ' · error=' + (resp.error || 'لا'))
+          : 'استجابة فارغة');
         if (!resp || resp.error) {
           const errName = (resp && resp.error) || 'cancelled';
           /* خطأ popup_closed في وضع FedCM يعني أن المتصفح لا يستطيع إظهار
@@ -505,7 +542,9 @@
           }
           /* نمرّر الاثنين: Firebase يستخدم ما توفّر */
           const cred = provider.credential(idToken || null, accessToken || null);
+          gisTrace('credential', 'idToken=' + (idToken ? 'نعم' : 'لا') + ' · accessToken=' + (accessToken ? 'نعم' : 'لا'));
           fb.auth.signInWithCredential(cred).then(c => {
+            gisTrace('signin:ok', (c && c.user && c.user.email) || 'مستخدم');
             finish(resolve, { user: (c && c.user) || c });
           }).catch(err => {
             cleanupWatchers();
@@ -518,8 +557,10 @@
       };
 
       try {
+        gisTrace('request:start', 'الوضع=' + gisClientMode + ' · داخل تفعيل النقرة');
         gisClient.requestAccessToken();
       } catch (err) {
+        gisTrace('request:threw', (err && err.message) || String(err));
         cleanupWatchers();
         /* نسجّل سبب GIS الحقيقي — يظهر في صفحة الفحص */
         gisLastError = {
@@ -755,17 +796,27 @@
           code === 'auth/cancelled-popup-request' ||
           code === 'auth/timeout';
 
+        /* -----------------------------------------------------------------
+           إلغاء المستخدم **ليس عطلاً**: لا نفتح نافذة ثانية ولا ننتقل إلى
+           مسار Firebase. لكن قبل أن نحكم بالإلغاء، نتحقق من الجلسة — فقد
+           يكون الدخول نجح ثم أُغلقت النافذة. وإن كانت الجلسة قائمة ننجح.
+           ----------------------------------------------------------------- */
         const userCancelled =
-          code === 'auth/cancelled' || code === 'auth/access_denied';
+          code === 'auth/cancelled' || code === 'auth/access_denied' ||
+          code === 'auth/access-denied';
 
-        const retryable =
-          code === 'gis/no-token' || code === 'gis/no-id-token' ||
-          code === 'gis/init-failed' || code === 'gis/not-ready' ||
-          code === 'auth/operation-not-supported-in-this-environment' ||
-          code === 'auth/internal-error' ||
-          displayFailure || userCancelled;
+        if (userCancelled) {
+          return waitForSession(1200).then(u => {
+            if (u) return { user: u };          /* الدخول كان ناجحاً فعلاً */
+            const e = new Error('أُلغيت عملية الدخول. اضغط «الدخول بحساب Google» وأكمل اختيار حسابك.');
+            e.code = 'auth/cancelled';
+            throw e;
+          });
+        }
 
-        if (displayFailure && !userCancelled && !fb.auth.currentUser) {
+        /* فشل في طريقة العرض: نُعيد المحاولة بطريقة GIS الأخرى، فهذا يحلّ
+           أغلب حالات الهاتف. وإن فشلت نلجأ إلى Firebase. */
+        if (displayFailure && !fb.auth.currentUser) {
           try { ensureGisClient(cid); } catch (e) {}   /* يُعاد البناء بالوضع الجديد */
           if (gisClient) {
             return startGisRequest().catch(retryErr => {
@@ -778,6 +829,13 @@
             });
           }
         }
+
+        const retryable =
+          code === 'gis/no-token' || code === 'gis/no-id-token' ||
+          code === 'gis/init-failed' || code === 'gis/not-ready' ||
+          code === 'auth/operation-not-supported-in-this-environment' ||
+          code === 'auth/internal-error' ||
+          displayFailure;
 
         if (retryable) return fallback();
 
