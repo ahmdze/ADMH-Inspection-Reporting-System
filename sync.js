@@ -331,38 +331,36 @@
           finish(reject, e);
           return;
         }
-        if (!resp.id_token) {
-          /* -----------------------------------------------------------------
-             لم يصل رمز الهوية. أشهر سببين:
-               ١) كروم يحجب كوكيز الطرف الثالث — فيحتاج FedCM
-               ٢) النطاق غير مسجَّل في Authorized JavaScript origins
-             نُخزّن الاستجابة الخام والرموز المتاحة للتشخيص الدقيق.
-             ----------------------------------------------------------------- */
-          gisLastResponse = {
-            hasAccessToken: !!(resp && resp.access_token),
-            hasIdToken: false,
-            scope: (resp && resp.scope) || '',
-            keys: resp ? Object.keys(resp).join(',') : '(none)',
-          };
+        /* -----------------------------------------------------------------
+           نحتاج رمزاً واحداً على الأقل: رمز الهوية أو رمز الوصول.
+           Firebase يقبل كليهما — هذا نصّ توثيقه الرسمي:
+             «At least one of ID token and access token is required.»
+             GoogleAuthProvider.credential(idToken?, accessToken?)
+           ومسار الرمز (token client) في Google Identity Services كثيراً ما
+           يُعيد access_token بلا id_token — وذاك كافٍ تماماً.
+           ----------------------------------------------------------------- */
+        const idToken = (resp && resp.id_token) || '';
+        const accessToken = (resp && resp.access_token) || '';
+
+        gisLastResponse = {
+          hasAccessToken: !!accessToken,
+          hasIdToken: !!idToken,
+          scope: (resp && resp.scope) || '',
+          keys: resp ? Object.keys(resp).join(',') : '(none)',
+        };
+
+        if (!idToken && !accessToken) {
           const e = new Error(
-            'لم يُعِد Google رمز الهوية.\n' +
-            'تأكد من أمرين: (١) أن نطاقك مضاف في Authorized JavaScript origins ' +
-            'بحرفه وبالبروتوكول، (٢) أن كوكيز الطرف الثالث غير محجوبة في متصفحك ' +
-            '(كروم ← الإعدادات ← الخصوصية ← كوكيز الطرف الثالث).\n' +
+            'لم يُعِد Google أي رمز دخول.\n' +
+            'تأكد أن نطاقك مضاف في Authorized JavaScript origins بحرفه وبالبروتوكول.\n' +
             'وصل من Google: ' + (gisLastResponse.keys || 'لا شيء'));
-          e.code = 'gis/no-id-token';
+          e.code = 'gis/no-token';
           e.raw = gisLastResponse;
           finish(reject, e);
           return;
         }
-        /* وصل رمز الهوية: نسجّل النجاح ونُنظّف التشخيص */
-        gisLastResponse = {
-          hasAccessToken: !!(resp && resp.access_token),
-          hasIdToken: true,
-          scope: (resp && resp.scope) || '',
-          keys: resp ? Object.keys(resp).join(',') : '(none)',
-        };
-        /* نحوّل رمز Google إلى جلسة Firebase.
+
+        /* نحوّل الرمز إلى جلسة Firebase.
            نلفّ التحويل بـ try لأن بعض نسخ المكتبة قد لا تُوفّر
            provider.credential — فنُظهر سبباً واضحاً بدل خطأ غامض. */
         try {
@@ -372,7 +370,8 @@
             e.code = 'auth/operation-not-supported-in-this-environment';
             throw e;
           }
-          const cred = provider.credential(resp.id_token);
+          /* نمرّر الاثنين: Firebase يستخدم ما توفّر */
+          const cred = provider.credential(idToken || null, accessToken || null);
           fb.auth.signInWithCredential(cred).then(c => {
             finish(resolve, { user: (c && c.user) || c });
           }).catch(err => {
@@ -585,11 +584,11 @@
         const code = (err && err.code) || '';
 
         /* -----------------------------------------------------------------
-           رمز الهوية غاب: نُجرّب مسار Firebase الاحتياطي.
-           لكن إن فشل هو أيضاً، نُظهر سبب Google Identity — فهو الأدق —
-           لأن رسالة Firebase العادية تفشل في وصف المشكلة الحقيقية.
+           لا رمز هوية ولا رمز وصول: ننتقل إلى مسار Firebase الاحتياطي.
+           وإن فشل هو أيضاً، نُظهر سبب Google Identity — فهو الأدق — لأن
+           رسالة Firebase العامة لا تصف المشكلة الحقيقية.
            ----------------------------------------------------------------- */
-        if (code === 'gis/no-id-token') {
+        if (code === 'gis/no-token' || code === 'gis/no-id-token') {
           return signInWithFirebaseGoogle().catch(() => { throw err; });
         }
 
