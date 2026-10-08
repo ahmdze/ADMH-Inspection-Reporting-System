@@ -153,11 +153,11 @@ pre{background:#0f1517;color:#d7e3e8;padding:12px;border-radius:8px;overflow:aut
                   'report-word.js', 'report-print.js'];
     fetch('app.js', { cache: 'no-store' }).then(r => r.text()).then(t => {
       const v = (/APP_VERSION\s*=\s*'([^']+)'/.exec(t) || [])[1] || '؟';
-      if (v === '9.0.0') {
+      if (v === '9.1.0') {
         line('#envChecks', 'ok', 'نسخة النظام', v + ' — حديثة');
       } else {
         warnings++;
-        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 9.0.0 — حدّث الموقع وامسح ذاكرة المتصفح');
+        line('#envChecks', 'warn', 'نسخة النظام قديمة', 'المنشور: ' + v + ' والمطلوب: 9.1.0 — حدّث الموقع وامسح ذاكرة المتصفح');
       }
     }).catch(() => {});
 

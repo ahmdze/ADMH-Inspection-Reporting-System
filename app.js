@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '9.0.0';
+const APP_VERSION = '9.1.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -2177,6 +2177,28 @@ function renderSyncUI(st) {
       : 'المزامنة غير مفعّلة (البيانات محفوظة على هذا الجهاز)';
   }
   const off = $('#syncOff'), on = $('#syncOn'), warn = $('#syncWarn');
+
+  /* ---------------------------------------------------------------------
+     حالة معرّف عميل Google — تُعرض دائماً، في أي حالة كانت المزامنة.
+     السبب: المعرّف مطلوب ليعمل الدخول على الهاتف، وقد يكون المستخدم
+     مسجّلاً بالفعل على الحاسوب (فتظهر له شاشة «متصل» لا شاشة الإعداد).
+     --------------------------------------------------------------------- */
+  const S = sync.available() ? sync.get() : null;
+  const hasG = !!(S && S.hasGoogleClientId && S.hasGoogleClientId());
+  const gst = $('#gcidState');
+  if (gst) {
+    gst.textContent = hasG ? '✓ مضبوط — الهاتف مدعوم' : 'غير مضبوط';
+    gst.style.color = hasG ? 'var(--ok, #2e7d32)' : '';
+  }
+  const gi = $('#syncGClient');
+  if (gi && document.activeElement !== gi && S && S.googleClientId) {
+    const v = S.googleClientId();
+    if (v && !gi.value) gi.value = v;
+  }
+  /* إن لم يكن مضبوطاً، افتح القسم تلقائياً ليُلاحظه المستخدم */
+  const gbox = $('#gcidBox');
+  if (gbox && !hasG) gbox.open = true;
+
   if (!off || !on) return;
   off.classList.toggle('hidden', !!st.configured);
   on.classList.toggle('hidden', !st.configured);
@@ -2194,16 +2216,6 @@ function renderSyncUI(st) {
     setText('#syncStateText', st.busy ? 'جاري المزامنة…' : st.connected ? 'متصل ✓' : 'غير متصل');
     setText('#syncLastText', st.lastSync ? new Date(st.lastSync).toLocaleString('ar-IQ') : 'لم تتم بعد');
     setText('#syncDeviceText', st.device || '—');
-
-    /* حالة معرّف عميل Google — يحدّد هل نستخدم المسار الذي يعمل على الهاتف */
-    const S = sync.available() ? sync.get() : null;
-    const hasG = !!(S && S.hasGoogleClientId && S.hasGoogleClientId());
-    setText('#gcidState', hasG ? '✓ مضبوط — الهاتف مدعوم' : 'غير مضبوط');
-    const gi = $('#syncGClient');
-    if (gi && document.activeElement !== gi && S && S.googleClientId) {
-      const v = S.googleClientId();
-      if (v && !gi.value) gi.value = v;
-    }
 
     const ed = $('#syncConfigEdit');
     if (ed && document.activeElement !== ed) {
