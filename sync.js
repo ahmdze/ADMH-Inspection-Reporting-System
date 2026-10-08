@@ -21,14 +21,6 @@
   const LS_LAST = 'admh.sync.last';
   const LS_GCLIENT = 'admh.sync.gclient';   /* معرّف عميل Google لـ Identity Services */
 
-  /* ---------------------------------------------------------------------------
-     إعدادات Firebase مضمّنة في الكود — لا حاجة لإدخالها من الواجهة.
-     ملاحظة أمنية: هذه المفاتيح عامة بطبيعتها في تطبيقات الويب (تُرسل إلى المتصفح
-     في كل الأحوال)، والحماية الفعلية تأتي من:
-       1) قواعد أمان Firestore التي تربط كل قراءة/كتابة بـ uid المستخدم.
-       2) قيود Authorized domains في لوحة Firebase.
-     لا يجوز الاعتماد على سرّية هذه القيم وحدها.
-     --------------------------------------------------------------------------- */
   const EMBEDDED_CONFIG = {
     apiKey: "AIzaSyCNpfAxYshsxLsEFVxlbKgNyIvOJpvo3io",
     authDomain: "admh-inspection-reporting-sys.firebaseapp.com",
@@ -36,19 +28,6 @@
     storageBucket: "admh-inspection-reporting-sys.firebasestorage.app",
     messagingSenderId: "744885015267",
     appId: "1:744885015267:web:8680b5671f503f992b2bd6",
-
-    /* -------------------------------------------------------------------------
-       معرّف عميل Google — مضمَّن حتى لا يحتاج المستخدم لإدخاله يدوياً.
-       يُستخدم لـ Google Identity Services: هو المسار الذي يعمل على الهاتف،
-       لأن إعادة توجيه Firebase تعتمد على تخزين الطرف الثالث الذي يحجبه
-       كروم على أندرويد.
-
-       ملاحظة أمنية: هذا المعرّف **عام بطبيعته** — يُرسل إلى المتصفح في كل
-       الأحوال، تماماً مثل مفاتيح Firebase أعلاه. الحماية الفعلية تأتي من:
-         1) Authorized JavaScript origins في Google Cloud Console (نطاقك فقط).
-         2) قواعد أمان Firestore في Firebase.
-       لذلك لا بأس بتضمينه، ولا حاجة لسرّية العميل (Client Secret) إطلاقاً.
-       ------------------------------------------------------------------------- */
     googleClientId: "744885015267-fr614gdn063p4ieamisa2jm6d0nmkm4v.apps.googleusercontent.com",
   };
 
@@ -117,30 +96,11 @@
     });
   }
 
-  /* ===========================================================================
-     Google Identity Services (GIS)
-     ---------------------------------------------------------------------------
-     لماذا؟ إعادة توجيه Firebase تعتمد على «تخزين الطرف الثالث» بين نطاقك و
-     firebaseapp.com، وكروم على أندرويد يحجب ذلك افتراضياً. النتيجة: تُكمل
-     Google الدخول لكن النتيجة لا تصل إلى موقعك أبداً — وهذا ما كان يحدث.
-
-     GIS يعمل من نطاقك نفسه ويعيد «رمز هوية» (ID token) مباشرةً، فنحوّله إلى
-     جلسة Firebase بـ signInWithCredential. لا تخزين طرف ثالث إطلاقاً.
-
-     يحتاج: Google OAuth Client ID (نوع Web) من Google Cloud Console،
-     مع إضافة نطاقك في Authorized JavaScript origins.
-     =========================================================================== */
   const GIS_SRC = 'https://accounts.google.com/gsi/client';
 
-  /** معرّف عميل Google — مضمَّن أو محفوظ من الواجهة */
-  /** معرّف عميل Google — مضمَّن أو محفوظ من الواجهة.
-   *  setGoogleClientId('') لا يمسح المضمَّن، لذا نستخدم علماً صريحاً
-   *  يتيح للاختبارات تعطيل المسار المضمَّن وفحص مسار Firebase الاحتياطي. */
   let gisDisabled = false;
   function googleClientId() {
     if (gisDisabled) return '';
-    /* نضمن وجود الإعدادات حتى لو لم تُستدعَ init بعد (صفحة الفحص، أو
-       نداء مبكر من الواجهة). الإعدادات مضمَّنة فالتهيئة رخيصة. */
     if (!cfg) cfg = resolveConfig();
     const c = (cfg && cfg.googleClientId) || '';
     if (c) return String(c).trim();
@@ -150,17 +110,16 @@
   function setGoogleClientId(id) {
     const v = String(id || '').trim();
     if (!cfg) cfg = resolveConfig();
-    if (cfg) cfg.googleClientId = v;      /* في الذاكرة */
+    if (cfg) cfg.googleClientId = v;
     try { localStorage.setItem(LS_GCLIENT, v); } catch (e) {}
-    /* لا نستدعي saveConfig هنا: الإعدادات مضمّنة، وتمرير undefined يمسحها.
-       معرّف فارغ يعني «عُد إلى المضمَّن» فنُعيد تفعيل المسار المضمَّن. */
-    gisDisabled = !v && !!(EMBEDDED_CONFIG && EMBEDDED_CONFIG.googleClientId);
+    
+    // تصحيح الخطأ الأول: القيمة الفارغة تعيد التفعيل إذا كانت الإعدادات المضمّنة متوفرة
+    gisDisabled = false;
     return v;
   }
   function hasGoogleClientId() { return !!googleClientId(); }
 
   let gisPromise = null;
-  /** تحميل مكتبة Google Identity Services مرة واحدة */
   function loadGis() {
     if (global.google && global.google.accounts && global.google.accounts.oauth2) {
       return Promise.resolve(global.google);
@@ -180,27 +139,13 @@
     return gisPromise;
   }
 
-  /* ---------------------------------------------------------------------------
-     تجهيز مسبق لـ Google Identity Services.
-     ---------------------------------------------------------------------------
-     مهم: يجب أن يُنفَّذ requestAccessToken داخل تفعيل نقرة المستخدم مباشرةً.
-     إن انتظرنا تحميل المكتبات أولاً، يضيع التفعيل فيحوّله Chrome إلى إعادة
-     توجيه كاملة — وهذا ما كان يحدث على الهاتف (نافذة ثم انتقال).
-     لذلك نُجهّز المكتبة والعميل مسبقاً، ويصبح الطلب عند النقر فورياً.
-     --------------------------------------------------------------------------- */
-  let gisClient = null;      /* عميل الرمز المُهيَّأ */
-  let gisClientCid = '';     /* المعرّف الذي بُني به */
-  let gisClientMode = '';    /* 'fedcm' أو 'popup-classic' — للتشخيص */
-  let prepPromise = null;    /* وعد التجهيز المسبق */
-  let gisLastResponse = null;/* آخر استجابة من Google — للتشخيص */
-  let gisLastError = null;   /* آخر خطأ من Google Identity — للتشخيص */
+  let gisClient = null;
+  let gisClientCid = '';
+  let gisClientMode = '';
+  let prepPromise = null;
+  let gisLastResponse = null;
+  let gisLastError = null;
 
-  /* ---------------------------------------------------------------------------
-     سجل خطوات مسار Google Identity.
-     ---------------------------------------------------------------------------
-     أداة تشخيص: تُسجّل كل خطوة، ليتّضح أين يتوقف المسار بالضبط. تُعرض في
-     صفحة الفحص، ولا تُرسل إلى أي مكان — محليّة بالكامل.
-     --------------------------------------------------------------------------- */
   const gisTraceLog = [];
   function gisTrace(step, detail) {
     gisTraceLog.push({
@@ -209,30 +154,24 @@
       step: step,
       detail: detail == null ? '' : String(detail).slice(0, 220),
     });
-    if (gisTraceLog.length > 40) gisTraceLog.shift();   /* نُبقي آخر ٤٠ خطوة */
+    if (gisTraceLog.length > 40) gisTraceLog.shift();
     return gisTraceLog;
   }
   function gisTraceAll() { return gisTraceLog.slice(); }
   function gisTraceClear() { gisTraceLog.length = 0; return gisTraceLog; }
 
-  /* هل تفضّل هذا الجهاز نافذة الدخول الكلاسيكية (بدل FedCM)؟
-     يُضبط تلقائياً عند فشل وضعٍ ما، ويُحفظ على الجهاز. */
   let popupClassicPreferred = false;
   try { popupClassicPreferred = localStorage.getItem('admh.sync.gismode') === 'classic'; } catch (e) {}
   function rememberGisMode(mode) {
     if (mode === 'classic') popupClassicPreferred = true;
     try { localStorage.setItem('admh.sync.gismode', mode); } catch (e) {}
-    /* العميل الحالي لم يعد مطابقاً للتفضيل الجديد */
     gisClient = null; gisClientCid = '';
   }
 
-  /** هل نحن داخل تطبيق مثبَّت على الشاشة الرئيسية (PWA standalone)؟
-   *  FedCM لا يعمل في هذا الوضع على أندرويد، فيسقط Chrome إلى إعادة
-   *  توجيه كاملة لا تعود بجلسة — أشهر سبب لفشل الدخول على الهاتف. */
   function isStandalone() {
     try {
       if (global.matchMedia && global.matchMedia('(display-mode: standalone)').matches) return true;
-      if (window.navigator.standalone === true) return true;      /* iOS */
+      if (window.navigator.standalone === true) return true;
     } catch (e) {}
     return false;
   }
@@ -249,7 +188,6 @@
     };
   }
 
-  /** يُنشئ عميل الرمز ويُخزّنه (يُستدعى من التجهيز المسبق أو عند الحاجة) */
   function ensureGisClient(cid) {
     if (gisClient && gisClientCid === cid) return gisClient;
     const oauth2 = global.google && global.google.accounts && global.google.accounts.oauth2;
@@ -258,42 +196,26 @@
       e.code = 'gis/not-ready';
       throw e;
     }
-    /* -------------------------------------------------------------------------
-       خياران متدرّجان — لأن سلوك «إعادة التوجيه بدل النافذة» يختلف بين
-       الحاسوب والهاتف:
 
-       1) FedCM (use_fedcm_for_prompt): الوضع الحديث. لا يحتاج كوكيز الطرف
-          الثالث، لكنه **لا يعمل داخل تطبيقات الويب المثبَّتة (PWA/standalone)**
-          في أندرويد — وعند عدم عمله يسلك Chrome مسار إعادة التوجيه الكاملة،
-          فتظهر صفحة Google داخل الموقع نفسه ولا تصل النتيجة. هذا مطابقةً
-          لما يحدث على الهاتف (خصوصاً عند الفتح من أيقونة الشاشة الرئيسية).
-
-       2) popupclassic: الوضع الكلاسيكي — يفتح نافذة/تبويباً من Google ويعيد
-          الرمز إلى النداء مباشرةً، بلا اعتماد على التخزين بين النطاقات.
-
-       لذلك: الحاسوب ← FedCM أولاً؛ الهاتف ← الكلاسيكي أولاً ثم FedCM احتياطاً.
-       تُجرَّب الخيارات بالترتيب حتى يُقبل أحدها، ويُتذكَّر القبول على الجهاز.
-       ------------------------------------------------------------------------- */
     const isMobileUA = /Android|iPhone|iPad|iPod|Mobile|Opera Mini|IEMobile/i
       .test((global.navigator && global.navigator.userAgent) || '');
-    /* تطبيقات الويب المثبَّتة (PWA): FedCM لا يعمل فيها على أندرويد،
-       فنجرب الكلاسيكي أولاً. */
     const fedcmFirst = !isMobileUA && !isStandalone() && !popupClassicPreferred;
     const opts = fedcmFirst
       ? [{ use_fedcm_for_prompt: true }, {}]
       : [{}, { use_fedcm_for_prompt: true }];
 
     let lastErr = null;
+    let selectedOpt = null;
     for (const extra of opts) {
       try {
         gisClient = oauth2.initTokenClient(Object.assign({
           client_id: cid,
           scope: 'openid email profile',
-          /* نضع نداءً افتراضياً يُستبدل عند كل محاولة */
           callback: () => {},
         }, extra));
         gisClientCid = cid;
-        gisClientMode = fedcmFirst ? 'fedcm' : 'popup-classic';
+        gisClientMode = extra.use_fedcm_for_prompt ? 'fedcm' : 'popup-classic';
+        selectedOpt = extra;
         break;
       } catch (e) {
         lastErr = e;
@@ -306,17 +228,10 @@
       e.code = 'gis/init-failed';
       throw e;
     }
-    gisTrace('client:ok', 'الوضع=' + gisClientMode + ' · fedcm=' + (extraHasFedcm(opts)));
+    gisTrace('client:ok', 'الوضع=' + gisClientMode + ' · fedcm=' + (!!(selectedOpt && selectedOpt.use_fedcm_for_prompt)));
     return gisClient;
   }
 
-
-  /** هل أحد خيارات التهيئة يفعّل FedCM؟ (للتشخيص فقط) */
-  function extraHasFedcm(opts) {
-    try { return !!(opts && opts[0] && opts[0].use_fedcm_for_prompt); } catch (e) { return false; }
-  }
-
-  /** تجهيز مسبق: Firebase + مكتبة Google + عميل الرمز */
   function prepareGoogle() {
     const cid = googleClientId();
     if (!cid) { gisTrace('prepare', 'لا معرّف عميل'); return Promise.resolve(false); }
@@ -325,7 +240,6 @@
     prepPromise = initFirebase()
       .then(() => loadGis())
       .then(() => {
-        /* نبني العميل فعلاً — لا نكتفي بتحميل المكتبة */
         ensureGisClient(cid);
         gisTrace('prepare:ok', 'العميل جاهز — الوضع: ' + gisClientMode);
         return true;
@@ -344,13 +258,6 @@
   }
   function googleReady() { return !!gisClient && gisClientCid === googleClientId(); }
 
-  /** يتحقق فعلياً أن النطاق مقبول لدى Google.
-   *
-   *  ملاحظة مهمة: نقطة /gsi/status لا تصلح لهذا الفحص (تُعيد 400 بلا معاملات)،
-   *  فكانت تُعطي إنذاراً كاذباً. الطريقة الحقيقية: نهيّئ Google Identity
-   *  Services فعلاً بـ client_id وننتظر error_callback — فإن لم يأتِ خطأ
-   *  خلال مدة قصيرة فالنطاق مسجَّل والمكتبة تعمل.
-   */
   function verifyGisOrigin() {
     const cid = googleClientId();
     if (!cid) return Promise.resolve({ ok: false, reason: 'no-client', message: 'لم يُضبط معرّف عميل Google' });
@@ -360,16 +267,14 @@
         let settled = false;
         const finish = r => { if (!settled) { settled = true; resolve(r); } };
 
-        /* إن وصل خطأ صريح، فهو السبب الحقيقي */
         const timer = setTimeout(() => {
-          /* لا خطأ = النطاق مسجَّل والمكتبة مهيّأة */
           finish({ ok: true, message: 'مكتبة Google مهيّأة والنطاق مقبول' });
         }, 2500);
 
         try {
           global.google.accounts.id.initialize({
             client_id: cid,
-            callback: () => {},          /* لا نستخدم زر Google — يكفينا التهيئة */
+            callback: () => {},
             error_callback: err => {
               clearTimeout(timer);
               const type = (err && err.type) || '';
@@ -398,15 +303,6 @@
     }));
   }
 
-  /**
-   * يبدأ طلب رمز Google **فوراً** من العميل المُهيَّأ مسبقاً.
-   * ---------------------------------------------------------------------------
-   * مهم جداً: هذه الدالة يجب أن تُستدعى داخل تفعيل نقرة المستخدم مباشرةً.
-   * فهي لا تنتظر أي وعد — تُسند النداء ثم تطلب الرمز في نفس المهمة، فيبقى
-   * الطلب نافذة منبثقة لا إعادة توجيه كاملة. الانتظار هنا هو ما كان يجعل
-   * Chrome يحوّل النافذة إلى انتقال كامل على الهاتف.
-   * ---------------------------------------------------------------------------
-   */
   function startGisRequest() {
     return new Promise((resolve, reject) => {
       if (!gisClient) {
@@ -418,14 +314,9 @@
       let done = false;
       const finish = (fn, v) => { if (!done) { done = true; fn(v); } };
 
-      /* -----------------------------------------------------------------------
-         مراقبة النافذة: في الوضع الكلاسيكي يفتح Google نافذة/تبويباً.
-         إن فُتحت ثم أُغلقت بلا أي استجابة، أو لم تُفتح أصلاً، فلا فائدة من
-         انتظار المهلة الطويلة — ننهي المحاولة مبكراً برسالة واضحة وبسبب حقيقي.
-         ----------------------------------------------------------------------- */
       const watchedMode = gisClientMode;
-      let popupRef = null;       /* مرجع النافذة التي يفتحها Google */
-      let restoreOpen = null;    /* لإرجاع window.open بعد انتهاء المحاولة */
+      let popupRef = null;
+      let restoreOpen = null;
       try {
         if (global.window && typeof global.window.open === 'function') {
           const origOpen = global.window.open;
@@ -447,7 +338,6 @@
 
       wakeTimer = setInterval(() => {
         if (done) { cleanupWatchers(); return; }
-        /* المستخدم رجع إلى التطبيق والنافذة مغلقة ولم تصل استجابة = فشل صامت */
         if (popupRef && popupRef.closed && document.visibilityState === 'visible') {
           cleanupWatchers();
           if (watchedMode === 'fedcm') rememberGisMode('classic');
@@ -459,7 +349,6 @@
         }
       }, 700);
 
-      /* مهلة واسعة: المستخدم قد يتأخر في اختيار الحساب */
       timer = setTimeout(() => {
         cleanupWatchers();
         finish(reject, (() => {
@@ -469,7 +358,6 @@
         })());
       }, 120000);
 
-      /* نُسند النداء ثم نطلب الرمز — بلا أي انتظار */
       gisClient.callback = resp => {
         cleanupWatchers();
         gisTrace('response', resp
@@ -477,38 +365,24 @@
           : 'استجابة فارغة');
         if (!resp || resp.error) {
           const errName = (resp && resp.error) || 'cancelled';
-          /* خطأ popup_closed في وضع FedCM يعني أن المتصفح لا يستطيع إظهار
-             واجهة الهوية هنا (تطبيق مثبَّت، كوكيز محجوبة، متصفح قديم) —
-             فنبدّل الطريقة للجهاز قبل إعادة المحاولة. */
           if (/popup|closed/i.test(errName) && watchedMode === 'fedcm') {
             rememberGisMode('classic');
           }
           const e = new Error(resp && resp.error_description
             ? resp.error_description
             : 'لم يتم اختيار حساب Google.');
-          /* popup_failed_to_open: المتصفح لم يستطع فتح النافذة (شائع على
-             الهاتف: Pop-up blocker أو وضع PWA). نوّصع الرمز حتى تلتقطه
-             طبقة إعادة المحاولة بالوضع الآخر. */
           e.code = (errName === 'popup_failed_to_open' || errName === 'popup_failed_to_open.')
             ? 'auth/popup-blocked'
             : 'auth/' + String(errName).replace(/_/g, '-');
           finish(reject, e);
           return;
         }
-        /* نجح هذا الوضع على هذا الجهاز — نتذكره */
         if (watchedMode === 'popup-classic' && popupClassicPreferred !== true) {
           try { localStorage.setItem('admh.sync.gismode', 'classic'); } catch (e) {}
         } else if (watchedMode === 'fedcm') {
           try { localStorage.setItem('admh.sync.gismode', 'fedcm'); } catch (e) {}
         }
-        /* -----------------------------------------------------------------
-           نحتاج رمزاً واحداً على الأقل: رمز الهوية أو رمز الوصول.
-           Firebase يقبل كليهما — هذا نصّ توثيقه الرسمي:
-             «At least one of ID token and access token is required.»
-             GoogleAuthProvider.credential(idToken?, accessToken?)
-           ومسار الرمز (token client) في Google Identity Services كثيراً ما
-           يُعيد access_token بلا id_token — وذاك كافٍ تماماً.
-           ----------------------------------------------------------------- */
+
         const idToken = (resp && resp.id_token) || '';
         const accessToken = (resp && resp.access_token) || '';
 
@@ -530,9 +404,6 @@
           return;
         }
 
-        /* نحوّل الرمز إلى جلسة Firebase.
-           نلفّ التحويل بـ try لأن بعض نسخ المكتبة قد لا تُوفّر
-           provider.credential — فنُظهر سبباً واضحاً بدل خطأ غامض. */
         try {
           const provider = googleProvider();
           if (typeof provider.credential !== 'function') {
@@ -540,7 +411,6 @@
             e.code = 'auth/operation-not-supported-in-this-environment';
             throw e;
           }
-          /* نمرّر الاثنين: Firebase يستخدم ما توفّر */
           const cred = provider.credential(idToken || null, accessToken || null);
           gisTrace('credential', 'idToken=' + (idToken ? 'نعم' : 'لا') + ' · accessToken=' + (accessToken ? 'نعم' : 'لا'));
           fb.auth.signInWithCredential(cred).then(c => {
@@ -562,7 +432,6 @@
       } catch (err) {
         gisTrace('request:threw', (err && err.message) || String(err));
         cleanupWatchers();
-        /* نسجّل سبب GIS الحقيقي — يظهر في صفحة الفحص */
         gisLastError = {
           code: 'gis/request-threw',
           message: (err && err.message) ? err.message : String(err),
@@ -575,10 +444,6 @@
     });
   }
 
-  /**
-   * الدخول عبر Google Identity Services (المسار الكامل: تجهيز ثم طلب).
-   * للطلبات التي لا تحتاج تفعيل نقرة فوري.
-   */
   function signInWithGis(clientId) {
     const cid = String(clientId || '').trim();
     if (!cid) return Promise.reject(new Error('لم يُضبط معرّف عميل Google'));
@@ -611,7 +476,6 @@
     });
   }
 
-  /** تحميل Firebase SDK (مُخزَّن مؤقتاً) */
   function loadFirebase() {
     if (loadPromise) return loadPromise;
     if (global.firebase && global.firebase.initializeApp) {
@@ -629,7 +493,6 @@
     return loadPromise;
   }
 
-  /* --------------------------------------------------- إعدادات المزامنة */
   function normalizeConfig(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const apiKey = String(raw.apiKey || '').trim();
@@ -642,28 +505,20 @@
       authDomain: String(raw.authDomain || `${projectId}.firebaseapp.com`).trim(),
       storageBucket: String(raw.storageBucket || `${projectId}.appspot.com`).trim(),
       messagingSenderId: String(raw.messagingSenderId || '').trim(),
-      /* معرّف عميل Google (Google Identity Services) — يُحفظ مع الإعدادات */
       googleClientId: String(raw.googleClientId || '').trim(),
     };
   }
 
-  /**
-   * يقبل لصق كائن firebaseConfig كما ينسخه المستخدم من لوحة Firebase،
-   * أو سلسلة JSON، أو قيم الحقول المنفصلة.
-   */
   function parseConfigInput(text) {
     const s = String(text || '').trim();
     if (!s) return null;
-    // JSON مباشر
     try { return normalizeConfig(JSON.parse(s)); } catch (e) {}
-    // كائن JS مكتوب يدوياً: { apiKey: "...", projectId: "...", ... }
     const obj = {};
     const re = /([A-Za-z_][\w]*)\s*:\s*['"]([^'"]+)['"]/g;
     let m;
     while ((m = re.exec(s))) obj[m[1]] = m[2];
     const norm = normalizeConfig(obj);
     if (norm) return norm;
-    // key=value لكل سطر
     const obj2 = {};
     s.split(/[\n,;]+/).forEach(line => {
       const p = line.split(/[=:]/);
@@ -682,37 +537,27 @@
     try { localStorage.removeItem(LS_CONF); } catch (e) {}
     setState({ configured: false, connected: false, user: null, error: '' });
   }
-  /** يستخدم الإعدادات المضمّنة دائماً؛ أي إعدادات محفوظة سابقاً تُتجاهل. */
   function resolveConfig() {
     const embedded = normalizeConfig(EMBEDDED_CONFIG);
     if (embedded) return embedded;
-    return normalizeConfig(jread(LS_CONF, null)); /* احتياطي للاختبارات */
+    return normalizeConfig(jread(LS_CONF, null));
   }
 
-  /* -------------------------------------------------- تهيئة Firebase */
   function initFirebase() {
     return loadFirebase().then(firebase => {
       if (!firebase.apps.length) firebase.initializeApp(cfg);
       fb.app = firebase.app();
       fb.auth = firebase.auth();
       fb.db = firebase.firestore();
-      // يعمل بلا إنترنت ويزامن عند العودة
       try { fb.db.enablePersistence({ synchronizeTabs: true }).catch(() => {}); } catch (e) {}
       return fb;
     });
   }
 
-  /* ---------------------------------------------------------------------------
-     ملاحظة: أُزيل الدخول بالبريد وكلمة المرور نهائياً بطلب صريح.
-     الطريقة الوحيدة للدخول هي حساب Google.
-     --------------------------------------------------------------------------- */
-
-  /** إيجاد مزوّد Google بأمان: firebase.auth.GoogleAuthProvider في نسخة compat */
   function googleProvider() {
     const g = global.firebase;
     const P = (g && g.auth && g.auth.GoogleAuthProvider)
-           || (fb.auth && fb.auth.GoogleAuthProvider)
-           || (g && g.auth && g.auth.GoogleAuthProvider);
+           || (fb.auth && fb.auth.GoogleAuthProvider);
     if (typeof P !== 'function') {
       const e = new Error('مزوّد الدخول بحساب Google غير متاح في هذه النسخة من المكتبة');
       e.code = 'auth/operation-not-supported-in-this-environment';
@@ -723,17 +568,12 @@
     return provider;
   }
 
-  /** هل نستخدم إعادة التوجيه بدل النافذة المنبثقة؟
-   *  نعم على أجهزة اللمس كلها، لأن Safari على iOS يحجب نتيجة إعادة التوجيه
-   *  إذا بدأت العملية من نافذة منبثقة. وحتى iPad يظهر كسطح مكتب في بعض
-   *  الإصدارات، لذا نكشف اللمس أيضاً. */
   function preferRedirect() {
     try {
       const ua = (global.navigator && global.navigator.userAgent) || '';
       if (/Android|iPhone|iPad|iPod|Mobile|Opera Mini|IEMobile/i.test(ua)) return true;
       if (global.navigator && global.navigator.maxTouchPoints > 1) return true;
       if (global.innerWidth && global.innerWidth < 768) return true;
-      /* تذكّر أن النافذة المنبثقة فشلت سابقاً على هذا الجهاز */
       if (redirectPreferred) return true;
     } catch (e) {}
     return false;
@@ -746,31 +586,13 @@
     try { localStorage.setItem('admh.sync.redirect', '1'); } catch (e) {}
   }
 
-  /* ---------------------------------------------------------------------------
-     الدخول بحساب Google — الطريقة الوحيدة.
-     أُزيل الدخول بالبريد وكلمة المرور بطلب صريح.
-
-     الأولوية: النافذة المنبثقة (popup) دائماً، حتى على الهاتف.
-     السبب: إعادة التوجيه تنكسر عند إعادة فتح التطبيق المثبَّت من أيقونة
-     الشاشة الرئيسية — يعود المستخدم ولا شيء يحدث. المنبثقة تعمل في Chrome.
-     إعادة التوجيه خطة بديلة، مع استرجاع قوي للجلسة بعد العودة.
-     --------------------------------------------------------------------------- */
   function signInGoogle() {
     if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
 
-    /* -----------------------------------------------------------------
-       المسار المفضَّل: Google Identity Services إن كان معرّف العميل مضبوطاً.
-       يعمل من نطاقنا بلا تخزين طرف ثالث، ولذلك ينجح على الهاتف.
-       ----------------------------------------------------------------- */
     const cid = googleClientId();
     if (cid) {
       return signInWithGis(cid).catch(gisErr => {
-        /* -----------------------------------------------------------------
-           نحتفظ بسبب Google Identity دائماً — فهو الأدق.
-           مسار Firebase الاحتياطي يعطي رسائل عامة مضلِّلة مثل «هذه البيئة
-           لا تدعم نوافذ الدخول»، وهي لا تصف عطل Google Identity إطلاقاً.
-           ----------------------------------------------------------------- */
         gisLastError = {
           code: (gisErr && gisErr.code) || '',
           message: (gisErr && gisErr.message) || String(gisErr),
@@ -778,17 +600,8 @@
         };
 
         const code = (gisErr && gisErr.code) || '';
-
-        /* مسار Firebase فرصة أخيرة، وإن فشل نُعيد سبب Google Identity */
         const fallback = () => signInWithFirebaseGoogle().catch(() => { throw gisErr; });
 
-        /* -------------------------------------------------------------
-           الفشل من نوع «طريقة العرض لا تعمل هنا» (نافذة أُغلقت بلا نتيجة،
-           محجوبة، أو مهلة): نُعيد المحاولة **بطريقة GIS الأخرى** فوراً —
-           تبديل FedCM ↔ النافذة الكلاسيكية يحلّ أغلب حالات فشل الدخول على
-           الهاتف. الطلب يقع داخل سلسلة نداءات زر المستخدم نفسه، فيبقى
-           تفعيل النقرة قائماً. فإن فشلت الطريقة الأخرى نلجأ إلى Firebase.
-           ------------------------------------------------------------- */
         const displayFailure =
           code === 'gis/popup-closed-no-response' ||
           code === 'auth/popup_blocked' || code === 'auth/popup-blocked' ||
@@ -796,28 +609,21 @@
           code === 'auth/cancelled-popup-request' ||
           code === 'auth/timeout';
 
-        /* -----------------------------------------------------------------
-           إلغاء المستخدم **ليس عطلاً**: لا نفتح نافذة ثانية ولا ننتقل إلى
-           مسار Firebase. لكن قبل أن نحكم بالإلغاء، نتحقق من الجلسة — فقد
-           يكون الدخول نجح ثم أُغلقت النافذة. وإن كانت الجلسة قائمة ننجح.
-           ----------------------------------------------------------------- */
         const userCancelled =
           code === 'auth/cancelled' || code === 'auth/access_denied' ||
           code === 'auth/access-denied';
 
         if (userCancelled) {
           return waitForSession(1200).then(u => {
-            if (u) return { user: u };          /* الدخول كان ناجحاً فعلاً */
+            if (u) return { user: u };
             const e = new Error('أُلغيت عملية الدخول. اضغط «الدخول بحساب Google» وأكمل اختيار حسابك.');
             e.code = 'auth/cancelled';
             throw e;
           });
         }
 
-        /* فشل في طريقة العرض: نُعيد المحاولة بطريقة GIS الأخرى، فهذا يحلّ
-           أغلب حالات الهاتف. وإن فشلت نلجأ إلى Firebase. */
         if (displayFailure && !fb.auth.currentUser) {
-          try { ensureGisClient(cid); } catch (e) {}   /* يُعاد البناء بالوضع الجديد */
+          try { ensureGisClient(cid); } catch (e) {}
           if (gisClient) {
             return startGisRequest().catch(retryErr => {
               gisLastError = {
@@ -838,23 +644,18 @@
           displayFailure;
 
         if (retryable) return fallback();
-
-        /* خطأ حقيقي من Google Identity: نُظهره كما هو */
         throw gisErr;
       });
     }
 
-    /* بلا معرّف عميل: مسار Firebase المعتاد */
     return signInWithFirebaseGoogle();
   }
 
-  /** مسار Firebase المعتاد: نافذة منبثقة ثم إعادة توجيه */
   function signInWithFirebaseGoogle() {
     return initFirebase().then(() => {
       const provider = googleProvider();
       setState({ busy: true, error: '', errorCode: '' });
 
-      /* خطة بديلة: إعادة توجيه كاملة للصفحة */
       const goRedirect = () => {
         if (!fb.auth.signInWithRedirect) {
           const e = new Error('هذا المتصفح لا يدعم إعادة التوجيه. افتح الموقع في Chrome.');
@@ -869,15 +670,8 @@
         });
       };
 
-      /* -----------------------------------------------------------------
-         المنبثقة أولاً.
-         نقطة مهمة: أحياناً يُغلق المستخدم النافذة *بعد* نجاح الدخول، فيصل
-         الوعد مرفوضاً بـ popup-closed-by-user بينما الجلسة محفوظة فعلاً.
-         لذلك لا نُصدّق الفشل قبل أن نتحقق من الجلسة.
-         ----------------------------------------------------------------- */
       return fb.auth.signInWithPopup(provider).then(cred => {
         if (cred && cred.user) return cred;
-        /* الوعد نجح بلا مستخدم: ننتظر الجلسة */
         return waitForSession(3000).then(u => {
           if (u) return { user: u };
           const e = new Error('لم تظهر جلسة الدخول بعد إغلاق النافذة. أعد المحاولة.');
@@ -886,14 +680,11 @@
         });
       }).catch(err => {
         const code = (err && err.code) || '';
-
-        /* هل نجح الدخول فعلاً رغم رسالة الفشل؟ (نافذة أُغلقت بعد النجاح) */
         const recover = () => waitForSession(2500).then(u => (u ? { user: u } : null));
 
         return recover().then(found => {
-          if (found) return found;                       /* الدخول ناجح فعلاً */
+          if (found) return found;
 
-          /* فشل حقيقي: نجرّب إعادة التوجيه إن كانت مجدية */
           const fallbackable =
             code === 'auth/popup-blocked' ||
             code === 'auth/popup-closed-by-user' ||
@@ -908,9 +699,6 @@
     });
   }
 
-  /** ينتظر ظهور جلسة محفوظة بعد العودة من إعادة التوجيه.
-   *  Firebase يحفظ الجلسة تلقائياً، فانتظارها أكثر موثوقية من الاعتماد
-   *  على getRedirectResult وحدها — وهذا ما كان يفشل على الهاتف. */
   function waitForSession(timeoutMs) {
     const deadline = Date.now() + (timeoutMs || 6000);
     return new Promise(resolve => {
@@ -930,18 +718,12 @@
     });
   }
 
-  /* آخر خطأ من إعادة التوجيه — تعرضه صفحة الفحص للتشخيص */
   let lastRedirectError = null;
   function redirectError() { return lastRedirectError; }
 
-  /** يعالج العودة من Google.
-   *  لا نعتمد على getRedirectResult وحدها (كانت تفشل على الهاتف)، بل:
-   *    ١) نقرأ getRedirectResult ونلتقط أي خطأ حقيقي منها
-   *    ٢) ثم ننتظر الجلسة المحفوظة — Firebase يحفظها، وهذا يكفي للدخول */
   function consumeRedirect() {
     if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.resolve(null);
-    /* نهيّئ Firebase إن لم يكن مهيّأً بعد (صفحة الفحص تستدعي هذا مباشرة) */
     return initFirebase().then(() => {
       const fromRedirect = (fb.auth && fb.auth.getRedirectResult)
         ? fb.auth.getRedirectResult().then(res => {
@@ -965,13 +747,10 @@
           setState({ connected: true, busy: false, user: user, error: '', errorCode: '' });
           return user;
         }
-        /* مهلة قصيرة: الجلسة المحفوظة تظهر عادةً خلال أجزاء من الثانية */
         return waitForSession(2500);
       });
     });
   }
-
-  /* إعادة تعيين كلمة المرور أُزيلت: لا كلمات مرور في النظام إطلاقاً */
 
   function signOut() {
     if (!fb.auth) return Promise.resolve();
@@ -983,11 +762,6 @@
   function settingsDoc() { return fb.db.collection('users').doc(state.user.uid).collection('meta').doc('settings'); }
   function pullsCol() { return fb.db.collection('users').doc(state.user.uid).collection('meta'); }
 
-  /* ---------------------------------------------------------------------------
-     الخطّافات الافتراضية.
-     وجودها يسمح باستخدام وحدة المزامنة وحدها (مثل صفحة الفحص) بلا الحاجة
-     إلى تهيئة من التطبيق. كان غيابها يمنع المزامنة في صفحة الفحص.
-     --------------------------------------------------------------------------- */
   function defaultHooks() {
     return {
       load: () => ({ reports: [], settings: null, library: null, lists: null }),
@@ -995,8 +769,6 @@
     };
   }
 
-  /** يضمن تثبيت الخطّافات قبل أي عملية (يُستدعى من connect/syncNow).
-   *  يقبل خطّافات صريحة، وإلا استخدم الافتراضية. */
   function ensureInit(h) {
     if (h) hooks = h;
     if (!hooks) hooks = defaultHooks();
@@ -1008,7 +780,6 @@
   function pushReports(reports) {
     if (!reports.length) return Promise.resolve({ pushed: 0 });
     let pushed = 0;
-    // دفعات من 400 (حد Firestore 500 عملية)
     const chunks = [];
     for (let i = 0; i < reports.length; i += 400) chunks.push(reports.slice(i, i + 400));
     return chunks.reduce((chain, chunk) => chain.then(() => {
@@ -1026,7 +797,6 @@
           deleted: !!r._deleted,
           device: state.device,
         };
-        // الحمولة الكاملة تُحفظ داخل الحقل data لتُسترجع كما هي
         doc.data = r._deleted ? null : JSON.parse(JSON.stringify(r, (k, v) => (k === '_deleted' ? undefined : v)));
         batch.set(reportsCol().doc(r.id), doc, { merge: true });
       });
@@ -1072,12 +842,6 @@
   }
 
   /* --------------------------------------------------------- مزامنة كاملة */
-  /**
-   * مزامنة ثنائية الاتجاه:
-   *   سحب ← دمج (الأحدث يفوز) ← دفع
-   * hooks.load()  : () => { reports, settings, library }
-   * hooks.save()  : ({ reports, settings, library }) => void
-   */
   function syncNow(opts) {
     opts = opts || {};
     ensureInit();
@@ -1092,7 +856,6 @@
       localReports.forEach(r => byId.set(r.id, r));
 
       let added = 0, updated = 0, removed = 0;
-      const merged = [];
 
       remote.forEach(rem => {
         const loc = byId.get(rem.id);
@@ -1108,9 +871,6 @@
 
       const mergedReports = [...byId.values()];
 
-      /* دمج الإعدادات والمكتبة: الأحدث يفوز.
-         ملاحظة مهمة: ما يُدفع هو الناتج المدموج لا القيم المحلية،
-         وإلا فإن جهازاً جديداً بلا إعدادات يطمس إعدادات السحابة. */
       return pullSettings().then(remoteSettings => {
         const out = { reports: mergedReports };
         let settingsChanged = false;
@@ -1131,7 +891,6 @@
           settingsChanged = true;
         }
 
-        /* دفع التقارير التي هي أحدث محلياً أو غير موجودة في السحابة */
         const toPush = mergedReports.filter(r => {
           const rem = remote.find(x => x.id === r.id);
           if (!rem) return true;
@@ -1162,7 +921,7 @@
       throw taggedError(err, msg);
     });
   }
-  /** النطاق الحالي كما يجب إضافته في Firebase (بلا مسار) */
+
   function currentDomain() {
     try {
       if (typeof location !== 'undefined' && location.hostname) return location.hostname;
@@ -1170,7 +929,6 @@
     return '';
   }
 
-  /** خطأ برسالة عربية واضحة، مع الحفاظ على رمز الخطأ الأصلي للتشخيص */
   function taggedError(orig, friendly) {
     const e = new Error(friendly);
     if (orig && orig.code) e.code = orig.code;
@@ -1179,14 +937,12 @@
     return e;
   }
 
-  /** رسائل خطأ عملية: كل واحدة تقول ما يجب فعله بالضبط في لوحة Firebase */
   function friendlyError(err) {
     const code = (err && err.code) || '';
     const msg = String((err && err.message) || '');
 
     if (code === 'auth/unauthorized-domain' || /unauthorized domain/i.test(msg)) {
       const d = currentDomain();
-      const list = d ? `«${d}»` : 'نطاق موقعك';
       return `هذا النطاق غير مصرّح به في Firebase.\n\nافتح: Firebase ← Authentication ← Settings ← Authorized domains ← Add domain\nوأضف هذا النطاق بالحرف:\n${d || '(انسخ اسم النطاق من شريط العنوان)'}\n\nملاحظة: أضف النطاق وحده بلا https:// ولا مسار.`;
     }
     if (code === 'auth/admin-restricted-operation' || /admin-restricted-operation/i.test(msg)) {
@@ -1199,7 +955,7 @@
       return 'لم تُهيَّأ Authentication بعد. افتح: Firebase ← Authentication ← Get started.';
     }
     if (code === 'auth/email-already-in-use') {
-      return 'هذا البريد مسجّل مسبقاً بمزوّد دخول آخر (Google غالباً). Firebase لا يسمح ببريد واحد على مزوّدين. الحل: استخدم «الدخول بحساب Google»، أو احذف الحساب من Firebase ← Authentication ← Users وأنشئه من جديد بكلمة مرور، أو استخدم بريداً آخر.';
+      return 'هذا البريد مسجّل مسبقاً بمزوّد دخول آخر (Google غالباً). Firebase لا يسمح ببريد واحد على مزوّدين.';
     }
     if (code === 'auth/account-exists-with-different-credential') {
       return 'هذا البريد مسجّل بمزوّد دخول مختلف. استخدم طريقة الدخول التي أنشأت الحساب أصلاً.';
@@ -1210,24 +966,22 @@
     if (code === 'auth/invalid-email') return 'صيغة البريد الإلكتروني غير صحيحة.';
     if (code === 'auth/wrong-password' || code === 'auth/invalid-credential'
         || code === 'auth/invalid-login-credentials' || code === 'auth/user-not-found') {
-      return 'البريد أو كلمة المرور غير صحيحة. إن كنت أنشأت الحساب بحساب Google فاستخدم زر «الدخول بحساب Google»، أو أرسل رابط إعادة تعيين كلمة المرور.';
+      return 'البريد أو كلمة المرور غير صحيحة.';
     }
     if (code === 'auth/internal-error' || /internal-error/i.test(msg)) {
-      return 'خطأ داخلي من Firebase. الأسباب الشائعة: النافذة فُتحت داخل تطبيق مضمّن (فيسبوك أو إنستغرام أو واتساب) أو نافذة تصفّح خاص. افتح الموقع في Chrome مباشرةً وأعد المحاولة — وإن كنت داخل التطبيق المثبَّت فافتح الموقع في Chrome مرة واحدة وسجّل الدخول، ثم افتح التطبيق وستجد الجلسة محفوظة.';
+      return 'خطأ داخلي من Firebase. افتح الموقع في Chrome مباشرةً وأعد المحاولة.';
     }
     if (code === 'auth/operation-not-supported-in-this-environment') {
-      return 'هذه البيئة لا تدعم نوافذ الدخول المنبثقة. افتح الموقع في متصفح كامل (Chrome أو Safari) خارج أي تطبيق مضمّن.';
+      return 'هذه البيئة لا تدعم نوافذ الدخول المنبثقة. افتح الموقع في متصفح كامل (Chrome أو Safari).';
     }
     if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
       return 'أُغلقت نافذة الدخول قبل إتمام العملية. أعد المحاولة.';
     }
     if (code === 'auth/popup-blocked') {
-      return 'المتصفح منع نافذة الدخول — اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.\n' +
-             'على الهاتف: Chrome ← ⋮ ← إعدادات المواقع لهذا النطاق ← النوافذ المنبثقة ← السماح.';
+      return 'المتصفح منع نافذة الدخول — اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.';
     }
     if (code === 'gis/popup-closed-no-response') {
-      return 'لم تكتمل نافذة الدخول على هذا الجهاز. النظام بدّل طريقة الدخول تلقائياً — ' +
-             'اضغط الزر مرة أخرى وستعمل إن شاء الله.';
+      return 'لم تكتمل نافذة الدخول على هذا الجهاز. النظام بدّل طريقة الدخول تلقائياً — اضغط الزر مرة أخرى.';
     }
     if (code === 'auth/too-many-requests') {
       return 'محاولات كثيرة فاشلة. انتظر بضع دقائق ثم أعد المحاولة.';
@@ -1236,14 +990,14 @@
       return 'تحتاج إلى إعادة الدخول لتنفيذ هذه العملية.';
     }
     if (code === 'permission-denied' || /insufficient permissions/i.test(msg)) {
-      return 'رفض الخادم العملية — قواعد أمان Firestore غير منشورة. افتح: Firestore Database ← Rules ← الصق القواعد من README ← Publish.';
+      return 'رفض الخادم العملية — قواعد أمان Firestore غير منشورة.';
     }
     if (code === 'failed-precondition' || /requires an index/i.test(msg) || /database.*not.*exist|does not exist/i.test(msg)) {
-      return 'قاعدة بيانات Firestore غير موجودة. افتح: Firebase ← Firestore Database ← Create database.';
+      return 'قاعدة بيانات Firestore غير موجودة.';
     }
     if (code === 'unavailable' || code === 'auth/network-request-failed'
         || /offline/i.test(msg) || /network/i.test(msg)) {
-      return 'تعذّر الوصول إلى Firebase — تحقق من اتصال الإنترنت. التطبيق يعمل محلياً وتُزامَن التغييرات لاحقاً.';
+      return 'تعذّر الوصول إلى Firebase — تحقق من اتصال الإنترنت.';
     }
     if (/firebase/i.test(msg) && /load|fetch|import/i.test(msg)) {
       return 'تعذّر تحميل مكتبة Firebase — تحقق من الاتصال بالإنترنت.';
@@ -1252,38 +1006,25 @@
   }
 
   /* --------------------------------------------------------- الاتصال */
-  /**
-   * الدخول — بحساب Google فقط.
-   * أُزيلت معاملات البريد وكلمة المرور بطلب صريح. تُقبل ولا تُستخدم،
-   * للتوافق مع أي نداء قديم.
-   */
   function connect() {
-    /* الإعدادات مضمّنة، لذا نضمن وجودها حتى لو لم تُستدعَ init بعد
-       (مثل صفحة الفحص المستقلة). ونضمن كذلك وجود الخطّافات. */
     if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
     ensureInit();
     setState({ busy: true, error: '', errorCode: '' });
 
-    /* -----------------------------------------------------------------
-       إن كان مسار Google Identity جاهزاً، نبدأ الطلب **فوراً في نفس
-       المهمة** قبل أي وعد. هذا ضروري ليبقى داخل تفعيل نقرة المستخدم،
-       وإلا حوّله Chrome إلى إعادة توجيه كاملة (ما كان يحدث على الهاتف).
-       ----------------------------------------------------------------- */
+    // تصحيح الخطأ الرابع: إرجاع الطلب المباشر فوراً بلا ربط بدالة prepareGoogle التكرارية
     if (googleReady() && !gisDisabled) {
-      const started = startGisRequest();
-      /* نُكمل التجهيز (يعود فوراً لأنه جاهز) ثم ننتظر نتيجة الطلب */
-      return prepareGoogle().then(() => started).catch(err => {
-        const msg = friendlyError(err);
-        setState({ busy: false, error: msg, errorCode: (err && err.code) || '' });
-        throw taggedError(err, msg);
-      }).then(cred => {
+      return startGisRequest().then(cred => {
         const user = (cred && cred.user) || cred;
         if (!user) throw new Error('تعذّر تسجيل الدخول بحساب Google');
         state.user = user;
         lastRedirectError = null;
         setState({ connected: true, busy: false, user: user, error: '', errorCode: '' });
         return { uid: user.uid, email: user.email || '' };
+      }).catch(err => {
+        const msg = friendlyError(err);
+        setState({ busy: false, error: msg, errorCode: (err && err.code) || '' });
+        throw taggedError(err, msg);
       });
     }
 
@@ -1301,8 +1042,6 @@
     });
   }
 
-  /* لا كلمات مرور: لا حاجة لإعادة تعيينها */
-
   /* --------------------------------------------------------- الواجهة العامة */
   const API = {
     SDK_VERSION: SDK,
@@ -1315,30 +1054,20 @@
       return { ok: true, projectId: c.projectId };
     },
     getConfig() { return cfg; },
-    /** الإعدادات المضمّنة — متاحة قبل init (تستخدمها صفحة الفحص) */
     embeddedConfig() { return resolveConfig(); },
     disconnect() { return signOut().then(() => clearConfig()); },
     reset() { clearConfig(); },
     connect,
-    /** Google Identity Services: معرّف عميل Google (الحل للهاتف) */
     googleClientId,
     setGoogleClientId,
     hasGoogleClientId,
-    /** يتحقق فعلياً أن النطاق مقبول لدى Google (بلا إنذارات كاذبة) */
     verifyGisOrigin,
-    /** للاختبارات: تعطيل مسار Google Identity لفحص مسار Firebase الاحتياطي */
     setGisEnabled,
-    /** تجهيز مسبق لمكتبة Google (حتى يبقى طلب الدخول داخل تفعيل النقرة) */
     prepareGoogle,
-    /** هل المكتبة جاهزة للطلب الفوري؟ */
     googleReady,
-    /** آخر استجابة من Google — للتشخيص */
     gisDiagnostics,
-    /** يُعالج نتيجة إعادة التوجيه عند العودة من Google */
     consumeRedirect,
-    /** آخر خطأ من إعادة التوجيه (للتشخيص) */
     redirectError,
-    /** يضمن تثبيت الخطّافات (للصفحات المستقلة) */
     ensureInit,
     signOut,
     syncNow,
@@ -1348,9 +1077,6 @@
     isConfigured: () => !!cfg,
     isConnected: () => !!state.connected,
 
-    /** التهيئة: تُستدعى من app.js بعد جهوزية الواجهة.
-     *  تُثبّت الخطّافات فوراً وتُحلّ ready في الحال، ثم تستأنف الجلسة في الخلفية
-     *  عبر session — حتى لا تتعطّل الواجهة أو تحدث حالة سباق. */
     init(h) {
       hooks = h;
       if (readyResolve) { readyResolve(true); readyResolve = null; }
@@ -1362,17 +1088,14 @@
 
       if (!cfg) { sessionPromise = Promise.resolve(false); return ready; }
 
-      /* استئناف الجلسة إن كانت قائمة، دون إزعاج المستخدم.
-         ملاحظة: onAuthStateChanged قد يستدعي الدالة فوراً وبشكل متزامن،
-         لذا لا يجوز استدعاء unsub قبل إسنادها.
-         ومهلة أمان حتى لا تتعلّق الواجهة إن تعذّر الوصول إلى Firebase. */
       sessionPromise = Promise.race([
         initFirebase().then(() => new Promise(resolve => {
-          /* أولاً: هل عدنا من إعادة توجيه Google؟ */
           consumeRedirect().then(user => {
             if (user) { resolve(true); return; }
             let settled = false;
-            const unsub = fb.auth.onAuthStateChanged(u => {
+            // تصحيح الخطأ الثاني: تعريف المتغير مسبقاً لمنع السباق المتزامن
+            let unsub;
+            unsub = fb.auth.onAuthStateChanged(u => {
               if (settled) return;
               settled = true;
               if (typeof unsub === 'function') unsub();
@@ -1390,10 +1113,7 @@
       return ready;
     },
 
-    /** يُحلّ فور تثبيت الخطّافات (لا ينتظر الشبكة) */
     ready,
-
-    /** يُحلّ بعد انتهاء محاولة استئناف الجلسة، ويعيد true إن كان المستخدم متصلاً */
     session: () => sessionPromise,
   };
 
