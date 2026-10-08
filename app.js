@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '9.1.0';
+const APP_VERSION = '9.2.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1268,18 +1268,92 @@ function bindButtons() {
 
   /* المزامنة السحابية — الدخول بحساب Google فقط */
   bindOn('#btnSyncGoogle', () => syncNow(true));
+
+  /* ---------------------------------------------------------------------
+     معرّف عميل Google.
+     الحقل نصّ لاتيني داخل صفحة عربية، فاللصق قد يجلب مسافات أو محارف اتجاه
+     مخفية أو محارف HTML. نُنظّفها كلها قبل الحفظ — وإلا فشل الدخول بسبب
+     محرف واحد غير مرئي.
+     --------------------------------------------------------------------- */
+  const cleanClientId = v => String(v == null ? '' : v)
+    .replace(/&amp;/g, '&')                                 /* قادم من صفحة ويب */
+    .replace(/[\s\u00a0\u200e\u200f\u202a-\u202e\ufeff]+/g, '') /* مسافات ومحارف اتجاه */
+    .replace(/^["'<]+|["'>]+$/g, '')                        /* اقتباسات أو أقواس عالقة */
+    .trim();
+
+  const validClientId = v => /^[\w.-]+\.apps\.googleusercontent\.com$/.test(v);
+
+  /* معاينة فورية: تُطمئن المستخدم أن القيمة سليمة قبل الحفظ */
+  function showClientIdPreview() {
+    const inp = $('#syncGClient'), prev = $('#gcidPreview');
+    const v = cleanClientId(inp && inp.value);
+    if (!prev) return v;
+    if (!v) { prev.textContent = ''; }
+    else if (validClientId(v)) {
+      prev.textContent = '✓ الصيغة صحيحة (' + v.length + ' حرفاً) — ستبدأ بـ ' + v.slice(0, 12) + '…';
+      prev.style.color = 'var(--ok, #2e7d32)';
+    } else {
+      prev.textContent = '✗ الصيغة غير صحيحة — يجب أن تنتهي بـ .apps.googleusercontent.com';
+      prev.style.color = 'var(--danger, #c62828)';
+    }
+    return v;
+  }
+
+  const gi0 = $('#syncGClient');
+  if (gi0) {
+    gi0.addEventListener('input', showClientIdPreview);
+    gi0.addEventListener('paste', () => setTimeout(showClientIdPreview, 0));
+  }
+
+  /* لصق مباشر من الحافظة — يتجاوز أي تشويه في حقل الإدخال */
+  bindOn('#btnPasteGClient', () => {
+    const set = txt => {
+      const v = cleanClientId(txt);
+      const inp = $('#syncGClient');
+      if (inp) inp.value = v;
+      showClientIdPreview();
+      if (!v) { toast('الحافظة فارغة', 'warn'); return; }
+      if (validClientId(v)) toast('لُصق المعرّف ونُظّف ✓ — اضغط «حفظ المعرّف»', 'ok', 4000);
+      else toast('لُصق النص لكن صيغته غير صحيحة', 'warn', 5000);
+    };
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText()
+        .then(set)
+        .catch(() => {
+          /* المتصفح يمنع قراءة الحافظة: نُرشد المستخدم إلى اللصق اليدوي */
+          const inp = $('#syncGClient');
+          if (inp) inp.focus();
+          toast('المتصفح منع القراءة — الصق يدوياً في الحقل (Ctrl+V)', 'warn', 5000);
+        });
+    } else {
+      const inp = $('#syncGClient');
+      if (inp) inp.focus();
+      toast('الصق يدوياً في الحقل (Ctrl+V)', 'warn', 4000);
+    }
+  });
+
   /* حفظ معرّف عميل Google: بدونه قد يفشل الدخول على الهاتف */
   bindOn('#btnSaveGClient', () => {
     if (!sync.available()) { toast('وحدة المزامنة غير محمّلة', 'err'); return; }
-    const v = (($('#syncGClient') && $('#syncGClient').value) || '').trim();
-    if (v && !/\.apps\.googleusercontent\.com$/.test(v)) {
-      toast('المعرّف يجب أن ينتهي بـ .apps.googleusercontent.com', 'warn', 6000);
+    const inp = $('#syncGClient');
+    const raw = (inp && inp.value) || '';
+    const v = cleanClientId(raw);
+
+    /* نُصحّح الحقل ليُظهر القيمة النظيفة فعلاً */
+    if (inp && inp.value !== v) inp.value = v;
+
+    if (v && !validClientId(v)) {
+      toast('الصيغة غير صحيحة — يجب أن ينتهي المعرّف بـ .apps.googleusercontent.com', 'warn', 7000);
+      showClientIdPreview();
       return;
     }
     sync.get().setGoogleClientId(v);
     renderSyncUI();
-    toast(v ? 'حُفظ معرّف عميل Google — أعد المحاولة الآن' : 'أُزيل معرّف عميل Google', 'ok', 4000);
+    showClientIdPreview();
+    toast(v ? 'حُفظ معرّف عميل Google (' + v.length + ' حرفاً) — أعد المحاولة الآن'
+            : 'أُزيل معرّف عميل Google', 'ok', 5000);
   });
+
   bindOn('#btnSyncNow', () => syncNow(true));
   bindOn('#btnSyncSignOut', () => {
     const S = sync.get();
@@ -1381,7 +1455,7 @@ function verifyBindings() {
     'btnListsSaveDefault', 'btnListsExport', 'btnListsImport', 'btnListsResetAll',
     'btnCopy',
   'newSave', 'newDiscard',
-  'btnSaveGClient',
+  'btnSaveGClient', 'btnPasteGClient',
     'btnListAdd', 'btnListReset', 'listPicker',
     'bulkFillEmpty', 'bulkFillAll'];
   const missing = must.filter(id => {
@@ -2194,6 +2268,12 @@ function renderSyncUI(st) {
   if (gi && document.activeElement !== gi && S && S.googleClientId) {
     const v = S.googleClientId();
     if (v && !gi.value) gi.value = v;
+  }
+  /* نعرض المعرّف المحفوظ كاملاً — ليتأكد المستخدم أن الأرقام في أولها */
+  const gsv = $('#gcidSaved');
+  if (gsv && S && S.googleClientId) {
+    const v = S.googleClientId();
+    gsv.textContent = v ? ('المحفوظ: ' + v) : '';
   }
   /* إن لم يكن مضبوطاً، افتح القسم تلقائياً ليُلاحظه المستخدم */
   const gbox = $('#gcidBox');

@@ -780,17 +780,28 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             </p>
             <div class="f" style="margin-top:10px">
               <label for="syncGClient">Google OAuth Client ID</label>
-              <input type="text" id="syncGClient" placeholder="1234567890-xxxxxxxx.apps.googleusercontent.com" autocomplete="off">
+              <!--
+                dir="ltr" ضروري: المعرّف نصّ لاتيني داخل صفحة عربية (RTL).
+                بدونه تُقلب الكتلتان حول الشارحة - فيبدو أن الأرقام انتقلت
+                إلى نهاية السطر، وهو تشويه بصري فقط لكنه يربك المستخدم.
+              -->
+              <input type="text" id="syncGClient" dir="ltr"
+                     style="text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:.86em;letter-spacing:0"
+                     placeholder="1234567890-xxxxxxxx.apps.googleusercontent.com"
+                     autocomplete="off" autocapitalize="off" spellcheck="false">
             </div>
             <p class="hint" style="margin:6px 0 0">
               من <b>Google Cloud Console</b> ← <b>APIs &amp; Services</b> ← <b>Credentials</b> ←
               <b>Create credentials</b> ← <b>OAuth client ID</b> ← نوع <b>Web application</b>،
               ثم أضف نطاقك في <b>Authorized JavaScript origins</b> <b>بالبروتوكول وبلا مسار</b>.
             </p>
+            <p class="hint" id="gcidPreview" style="margin:6px 0 0"></p>
             <div class="btnrow" style="margin-top:8px">
-              <button class="btn ghost sm" id="btnSaveGClient">حفظ المعرّف</button>
+              <button class="btn ghost sm" id="btnPasteGClient">📋 لصق من الحافظة</button>
+              <button class="btn ok sm" id="btnSaveGClient">حفظ المعرّف</button>
               <span class="pill" id="gcidState"></span>
             </div>
+            <p class="hint" id="gcidSaved" dir="ltr" style="margin:8px 0 0;text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:.8em;word-break:break-all"></p>
           </details>
 
           <details style="margin-top:14px" id="syncHelpBox">
