@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '12.0.0';
+const APP_VERSION = '13.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1365,11 +1365,27 @@ function bindButtons() {
       showClientIdPreview();
       return;
     }
+
+    /* ---------------------------------------------------------------------
+       حقل فارغ لا يعني «احذف المعرّف». المضمَّن في النظام يبقى فعّالاً.
+       كان الحفظ بحقل فارغ يمسح المعرّف المضمَّن والمحفوظ معاً، فيتخطّى
+       النظام Google Identity ويسقط إلى نافذة Firebase — التي تفشل على
+       الهاتف بـ auth/internal-error. وهذا كان عطلاً حقيقياً.
+       --------------------------------------------------------------------- */
+    if (!v) {
+      const embedded = sync.get().setGoogleClientId('');
+      renderSyncUI();
+      showClientIdPreview();
+      toast(embedded
+        ? 'الحقل فارغ — النظام يستخدم المعرّف المضمَّن تلقائياً'
+        : 'لا يوجد معرّف عميل Google', 'ok', 5000);
+      return;
+    }
+
     sync.get().setGoogleClientId(v);
     renderSyncUI();
     showClientIdPreview();
-    toast(v ? 'حُفظ معرّف عميل Google (' + v.length + ' حرفاً) — أعد المحاولة الآن'
-            : 'أُزيل معرّف عميل Google', 'ok', 5000);
+    toast('حُفظ معرّف عميل Google (' + v.length + ' حرفاً) — أعد المحاولة الآن', 'ok', 5000);
   });
 
   bindOn('#btnSyncNow', () => syncNow(true));

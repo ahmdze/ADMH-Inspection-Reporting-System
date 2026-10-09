@@ -138,29 +138,31 @@ const check = (n, c, d) => { if (c) { pass++; console.log('  ✓ ' + n); } else 
     check('mobile did not redirect when popup worked', calls.redirect === 0, calls);
   }
 
-  console.log('\n=== redirect only as fallback, with a safety net ===');
+  console.log('\n=== popup blocked: explicit message, no redirect ===');
   {
     const { S, calls } = makeEnv({ mobile: true, popupFails: 'auth/popup-blocked' });
     let err = null;
     try { await S.connect(); } catch (e) { err = e; }
-    check('falls back to redirect when popup is blocked', calls.redirect === 1, calls);
+    check('does not use redirect', calls.redirect === 0, calls);
     check('does not hang silently', !!err, err && err.message);
+    check('explains the popup is blocked',
+      !!(err && /نافذة|النوافذ/.test(err.message)), err && err.message);
   }
   {
-    /* المستخدم أغلق النافذة بلا إتمام الدخول. نتحقق أولاً من الجلسة (فقد يكون
-       الدخول نجح ثم أُغلقت النافذة)، وإن لم توجد ننتقل إلى إعادة التوجيه
-       لأنه لا يبقى سبيل آخر. السلوك التفصيلي في popup_test.js */
+    /* المستخدم أغلق النافذة: نتحقق من الجلسة أولاً (فقد يكون الدخول نجح)،
+       وإن لم توجد نُظهر خطأً واضحاً بلا إعادة توجيه. */
     const { S, calls } = makeEnv({ popupFails: 'auth/popup-closed-by-user' });
     let err = null;
     try { await S.connect(); } catch (e) { err = e; }
-    check('user-closed popup falls back to redirect', calls.redirect === 1, calls);
+    check('user-closed popup does not redirect', calls.redirect === 0, calls);
     check('and never hangs silently', !!err, err && err.message);
   }
   {
     const { S, calls } = makeEnv({ popupFails: 'auth/operation-not-supported-in-this-environment' });
     let err = null;
     try { await S.connect(); } catch (e) { err = e; }
-    check('unsupported environment redirects', calls.redirect === 1, calls);
+    check('unsupported environment does not redirect', calls.redirect === 0, calls);
+    check('and reports clearly', !!err, err && err.message);
   }
 
   console.log('\n=== returning from Google redirect ===');

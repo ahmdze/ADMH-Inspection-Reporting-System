@@ -164,51 +164,33 @@ const check = (n, c, d) => { if (c) { pass++; console.log('  ✓ ' + n); } else 
     check('الهاتف لا يُعاد توجيهه بلا داعٍ', e.calls.redirect === 0, e.calls);
   }
 
-  console.log('\n=== فشل حقيقي: تُجرَّب إعادة التوجيه ===');
+  console.log('\n=== عند حجب النافذة: رسالة صريحة بلا إعادة توجيه ===');
   {
-    const e = makeEnv({ popup: 'blocked', mobile: true, noGis: true });
+    /* القرار الموثَّق في تقرير المراجعة: أُزيلت إعادة التوجيه لأنها تعتمد
+       على تخزين الطرف الثالث لنطاق firebaseapp.com — وهو محجوب على الهاتف
+       فتفشل بصمت. البديل: رسالة صريحة تطلب السماح بالنوافذ المنبثقة. */
+    const e = makeEnv({ popup: 'blocked', noGis: true });
     let err = null;
     try { await e.S.connect(); } catch (x) { err = x; }
-    check('النافذة المحجوبة تُنتقل إلى إعادة التوجيه', e.calls.redirect === 1, e.calls);
-    check('لا تعليق صامت', !!err, err && err.message);
+    check('لا تُستخدم إعادة التوجيه إطلاقاً', e.calls.redirect === 0, e.calls);
+    check('ورسالة صريحة عن حجب النافذة',
+      !!(err && /نافذة|النوافذ/.test(err.message)), err && err.message);
   }
   {
-    const e = makeEnv({ popup: 'internal', mobile: true, noGis: true });
+    const e = makeEnv({ popup: 'internal', noGis: true });
     let err = null;
     try { await e.S.connect(); } catch (x) { err = x; }
-    check('الخطأ الداخلي يُنتقل إلى إعادة التوجيه', e.calls.redirect === 1, e.calls);
+    check('الخطأ الداخلي لا يُترجم إلى إعادة توجيه', e.calls.redirect === 0, e.calls);
+    check('ويُنتج خطأً معروضاً', !!err, err && err.message);
   }
   {
-    /* المستخدم أغلق النافذة بلا دخول: تُجرَّب إعادة التوجيه كنهاية مطاف */
     const e = makeEnv({ popup: 'closed', noGis: true });
     let err = null;
     try { await e.S.connect(); } catch (x) { err = x; }
-    check('الإغلاق بلا دخول ينتقل إلى إعادة التوجيه', e.calls.redirect === 1, e.calls);
-    check('ورسالة واضحة إن فشل الكل', !!err, err && err.message);
+    check('الإغلاق بلا دخول لا يفتح إعادة توجيه', e.calls.redirect === 0, e.calls);
+    check('ويُنتج خطأً معروضاً', !!err, err && err.message);
   }
 
-  console.log('\n=== العودة من إعادة التوجيه ===');
-  {
-    /* نُكمل محاولة الدخول أولاً (ستفشل وتُشغّل إعادة التوجيه)، ثم نُحاكي العودة */
-    const e = makeEnv({ popup: 'blocked', redirectOk: true, noGis: true });
-    let err = null;
-    try { await e.S.connect(); } catch (x) { err = x; }
-    check('إعادة التوجيه شُغّلت', e.calls.redirect === 1, e.calls);
-    const user = await e.S.consumeRedirect();
-    check('تُكتشف الجلسة بعد العودة', !!(user && user.email === 'redir@gmail.com'), user && user.email);
-    check('الحالة متصلة', e.S.isConnected() === true, e.S.status());
-  }
-  {
-    /* الجلسة محفوظة لكن getRedirectResult فارغة — الحالة التي فشلت على الهاتف:
-       الصفحة تُحمَّل من جديد، Firebase يستعيد الجلسة، والنتيجة لا تصل. */
-    const e = makeEnv({ popup: 'ok-no-user', noGis: true });
-    /* نُشغّل الدخول في الخلفية فتظهر الجلسة متأخرة */
-    e.S.connect().catch(() => {});
-    await new Promise(r => setTimeout(r, 700));
-    const user = await e.S.consumeRedirect();
-    check('تُكتشف الجلسة المحفوظة رغم فراغ نتيجة إعادة التوجيه',
-      !!(user && /late@gmail.com/.test(user.email)), user && user.email);
-  }
 
   console.log('\n=== Google Identity Services: الحل الذي يعمل على الهاتف ===');
   {
@@ -274,8 +256,12 @@ const check = (n, c, d) => { if (c) { pass++; console.log('  ✓ ' + n); } else 
     check('حفظ المعرّف يعمل', e.S.hasGoogleClientId() === true);
     check('ويُقرأ صحيحاً', e.S.googleClientId() === '999-xyz.apps.googleusercontent.com', e.S.googleClientId());
     check('وحفظه لا يمسح إعدادات المزامنة', e.S.isConfigured() === true, e.S.status());
-    e.S.setGoogleClientId('');
-    check('إزالة المعرّف تعمل', e.S.hasGoogleClientId() === false);
+    /* العطل الجذري: المسح كان يمحو المضمَّن فيتعطّل GIS كلياً */
+    const back = e.S.setGoogleClientId('');
+    check('المسح لا يمحو المعرّف المضمَّن', e.S.hasGoogleClientId() === true,
+      { has: e.S.hasGoogleClientId(), returned: back });
+    check('المعرّف المضمَّن يعود صالحاً',
+      /apps\.googleusercontent\.com$/.test(e.S.googleClientId()), e.S.googleClientId());
   }
 
   console.log('\n=== فحص النطاق الحقيقي (بدل /gsi/status الكاذب) ===');
@@ -352,8 +338,13 @@ const check = (n, c, d) => { if (c) { pass++; console.log('  ✓ ' + n); } else 
          · نحتفظ بالاستجابة الخام للتشخيص */
     const e = makeEnv({ gis: 'no-token', popup: 'ok' });
     await e.S.prepareGoogle();          /* نبني العميل أولاً */
-    check('FedCM مفعّل في تهيئة العميل',
-      !!(e.sb.__gisCfgSeen && e.sb.__gisCfgSeen.use_fedcm_for_prompt === true),
+    /* الطريقة تُبنى من قائمة الخيارات؛ على الهاتف تُفضَّل النافذة الكلاسيكية.
+       المهم أن التهيئة تنجح وأن معرّف العميل صحيح. */
+    check('تهيئة العميل تستخدم المعرّف الصحيح',
+      !!(e.sb.__gisCfgSeen && /apps\.googleusercontent\.com$/.test(e.sb.__gisCfgSeen.client_id || '')),
+      e.sb.__gisCfgSeen);
+    check('والنطاقات المطلوبة صحيحة',
+      !!(e.sb.__gisCfgSeen && /openid/.test(e.sb.__gisCfgSeen.scope || '')),
       e.sb.__gisCfgSeen);
 
     let err = null;
@@ -407,6 +398,47 @@ const check = (n, c, d) => { if (c) { pass++; console.log('  ✓ ' + n); } else 
     const cred = await e.S.connect();
     check('المسار الاحتياطي ينجح عند الحاجة', !!cred.email, cred.email);
     check('وقد استُخدمت النافذة', e.calls.popup === 1, e.calls);
+  }
+
+  console.log('\n=== العطل الجذري: مسح المعرّف كان يعطّل Google Identity ===');
+  {
+    /* ما كان يحدث فعلاً على الهاتف:
+       حفظ الحقل فارغاً يُنفّذ setGoogleClientId('') ← كان يمسح المعرّف
+       المضمَّن والمحفوظ معاً ← تصبح قيمة العميل فارغة ← يتخطّى النظام
+       Google Identity كلياً ← يسقط إلى نافذة Firebase ← auth/internal-error.
+       هذه الاختبارات تمنع عودة ذلك. */
+    const e = makeEnv({ mobile: true });
+
+    check('المعرّف المضمَّن موجود ابتداءً', e.S.hasGoogleClientId() === true, e.S.googleClientId());
+
+    const returned = e.S.setGoogleClientId('');
+    check('المسح لا يعطّل Google Identity', e.S.hasGoogleClientId() === true,
+      { has: e.S.hasGoogleClientId(), returned: returned });
+    check('ويعود بالمعرّف المضمَّن', /apps\.googleusercontent\.com$/.test(e.S.googleClientId()),
+      e.S.googleClientId());
+    check('وتُعاد القيمة الفعلية من الدالة', /apps\.googleusercontent\.com$/.test(returned || ''), returned);
+
+    const cred = await e.S.connect();
+    check('والدخول يستخدم GIS بعد المسح', e.calls.gis >= 1, e.calls);
+    check('ولا يفتح نافذة Firebase', e.calls.popup === 0, e.calls);
+    check('وينجح الدخول', !!cred.email, cred.email);
+  }
+  {
+    /* معرّف مخصّص يتقدّم على المضمَّن، والمسح يُعيد المضمَّن */
+    const e = makeEnv({});
+    e.S.setGoogleClientId('111-custom.apps.googleusercontent.com');
+    check('المخصّص يتقدّم على المضمَّن',
+      e.S.googleClientId() === '111-custom.apps.googleusercontent.com', e.S.googleClientId());
+    e.S.setGoogleClientId('');
+    check('والمسح يُعيد المضمَّن',
+      e.S.googleClientId().indexOf('111-') !== 0 && e.S.hasGoogleClientId() === true,
+      e.S.googleClientId());
+  }
+  {
+    /* محفوظ على الجهاز يتقدّم على المضمَّن */
+    const e = makeEnv({ gClient: '222-saved.apps.googleusercontent.com' });
+    check('المحفوظ على الجهاز يتقدّم',
+      e.S.googleClientId() === '222-saved.apps.googleusercontent.com', e.S.googleClientId());
   }
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);

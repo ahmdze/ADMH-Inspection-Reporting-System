@@ -98,23 +98,55 @@
 
   const GIS_SRC = 'https://accounts.google.com/gsi/client';
 
+  /* ---------------------------------------------------------------------------
+     معرّف عميل Google — ثلاث طبقات، ولا تُمسح إحداها بالأخرى:
+       ١) المضمَّن في الكود  (EMBEDDED_CONFIG.googleClientId) — الأصل دائماً
+       ٢) المحفوظ على الجهاز (LS_GCLIENT) — يتقدّم على المضمَّن إن وُجد
+       ٣) قيمة مؤقتة في الذاكرة (cfg.googleClientId) — للتعديل من الواجهة
+     ---------------------------------------------------------------------------
+     عطل حقيقي كان يحدث: كان setGoogleClientId('') يمسح المضمَّن والمحفوظ
+     معاً، فتصبح قيمة العميل فارغة، فيتخطّى النظام Google Identity كلياً
+     ويسقط إلى نافذة Firebase — التي تُعطي auth/internal-error على الهاتف.
+     --------------------------------------------------------------------------- */
   let gisDisabled = false;
-  function googleClientId() {
-    if (gisDisabled) return '';
-    if (!cfg) cfg = resolveConfig();
-    const c = (cfg && cfg.googleClientId) || '';
-    if (c) return String(c).trim();
+  let gclientOverride = '';      /* تعديل مؤقت من الواجهة في هذه الجلسة */
+
+  function embeddedClientId() {
+    return String((EMBEDDED_CONFIG && EMBEDDED_CONFIG.googleClientId) || '').trim();
+  }
+  function storedClientId() {
     try { return String(localStorage.getItem(LS_GCLIENT) || '').trim(); } catch (e) { return ''; }
   }
+
+  function googleClientId() {
+    /* للاختبارات فقط: تعطيل المسار المضمَّن تماماً */
+    if (gisDisabled) return '';
+    if (!cfg) cfg = resolveConfig();        /* نضمن تهيئة الإعدادات أيضاً */
+    if (gclientOverride) return gclientOverride;             /* ٣) تعديل الجلسة */
+    const saved = storedClientId();
+    if (saved) return saved;                                  /* ٢) المحفوظ */
+    if (cfg && cfg.googleClientId) return String(cfg.googleClientId).trim();
+    return embeddedClientId();                                /* ١) المضمَّن */
+  }
+
+  /** للاختبارات: تعطيل مسار Google Identity كلياً */
   function setGisEnabled(on) { gisDisabled = !on; }
+
+  /**
+   * تعديل معرّف العميل من الواجهة.
+   * قيمة فارغة تعني: «عُد إلى المضمَّن» ولا تمسحه أبداً.
+   */
   function setGoogleClientId(id) {
     const v = String(id || '').trim();
-    if (!cfg) cfg = resolveConfig();
+    gclientOverride = v;                    /* في الذاكرة لهذه الجلسة */
     if (cfg) cfg.googleClientId = v;
-    try { localStorage.setItem(LS_GCLIENT, v); } catch (e) {}
-    gisDisabled = false;
-    return v;
+    try {
+      if (v) localStorage.setItem(LS_GCLIENT, v);
+      else localStorage.removeItem(LS_GCLIENT);   /* نمسح المحفوظ فقط */
+    } catch (e) {}
+    return v || embeddedClientId();         /* نُعيد القيمة الفعلية المستخدمة */
   }
+
   function hasGoogleClientId() { return !!googleClientId(); }
 
   let gisPromise = null;
@@ -917,6 +949,15 @@
     }
     if (code === 'auth/operation-not-supported-in-this-environment' || code === 'auth/popup-blocked') {
       return 'المتصفح يمنع فتح النافذة المنبثقة للدخول. يرجى الضغط على خيار السماح بالنوافذ المنبثقة لهذا الموقع في المتصفح ثم أعد المحاولة.';
+    }
+    if (code === 'auth/operation-not-allowed') {
+      return 'الدخول بحساب Google غير مُفعَّل في Firebase. افتح: Authentication ← Sign-in method ← فعّل Google.';
+    }
+    if (code === 'auth/web-storage-unsupported') {
+      return 'المتصفح يمنع تخزين بيانات الدخول (كوكيز أو تخزين محلي). اسمح بها لهذا الموقع، أو افتح الموقع في Chrome بلا نافذة تصفّح خاص.';
+    }
+    if (code === 'auth/account-exists-with-different-credential') {
+      return 'هذا البريد مسجَّل بمزوّد دخول آخر. استخدم نفس طريقة الدخول التي أنشأت الحساب.';
     }
     if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
       return 'أُغلقت نافذة الدخول قبل إتمام العملية. أعد المحاولة.';
