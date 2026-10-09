@@ -130,6 +130,27 @@ select{cursor:pointer;appearance:none;background-image:linear-gradient(45deg,tra
 @media(max-width:520px){.btnrow .btn{flex:1 1 100%}}
 .act{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 
+/* ---------- قائمة خيارات نسخ التقرير ---------- */
+.copy-menu{position:relative;display:inline-flex;flex:none}
+.copy-menu>.btn{white-space:nowrap}
+.copy-menu-list{
+  position:absolute;top:calc(100% + 6px);inset-inline-end:0;z-index:950;
+  display:none;min-width:245px;padding:6px;background:var(--card);
+  border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);
+}
+.copy-menu.open .copy-menu-list{display:flex;flex-direction:column;gap:3px}
+.copy-menu-list button{
+  width:100%;text-align:start;justify-content:flex-start;
+  background:transparent;color:var(--text);border:0;border-radius:7px;
+  padding:10px 12px;min-height:42px;cursor:pointer;font-weight:500;
+}
+.copy-menu-list button:hover,.copy-menu-list button:focus-visible{background:var(--hover);outline:none}
+@media(max-width:520px){
+  .copy-menu{flex:1 1 100%}
+  .copy-menu>.btn{width:100%}
+  .copy-menu-list{inset-inline:0;min-width:0}
+}
+
 /* ---------- Tables ---------- */
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:10px;border:1px solid var(--border);border-radius:8px}
 table{width:100%;border-collapse:collapse;font-size:.88em;min-width:520px;background:var(--card)}
@@ -594,7 +615,15 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
           <button class="btn ghost sm" data-go="report">← رجوع للتحرير</button>
           <span class="pill" id="previewMeta"></span>
           <span style="flex:1"></span>
-          <button class="btn info sm" id="btnCopy" title="انسخ التقرير بتنسيقه لتلصقه في أي مكان">📋 نسخ النص كاملاً</button>
+          <div class="copy-menu" id="copyMenu">
+            <button class="btn info sm" id="btnCopy" type="button" aria-haspopup="true" aria-expanded="false" title="اختر الجزء الذي تريد نسخه">📋 نسخ النص ▾</button>
+            <div class="copy-menu-list" id="copyMenuList" role="menu" aria-label="خيارات نسخ التقرير">
+              <button type="button" role="menuitem" data-copy-mode="all">📄 نسخ المعلومات بالكامل</button>
+              <button type="button" role="menuitem" data-copy-mode="without-header">📋 نسخ دون الترويسة</button>
+              <button type="button" role="menuitem" data-copy-mode="without-header-recs">📝 نسخ دون الترويسة والتوصيات</button>
+              <button type="button" role="menuitem" data-copy-mode="recommendations">✅ نسخ التوصيات فقط</button>
+            </div>
+          </div>
           <button class="btn ok sm" id="btnWord2">📄 تصدير Word</button>
           <button class="btn ghost sm" id="btnPrint">🖨️ طباعة</button>
         </div>
