@@ -9,7 +9,7 @@
 const fs = require('fs'), path = require('path');
 const { execFileSync } = require('child_process');
 
-const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = require('./_chrome.js').requireChrome();
 const PROBE = path.resolve(__dirname, 'input_probe.html');
 const APP = path.resolve(__dirname, '..');
 

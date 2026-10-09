@@ -4,7 +4,7 @@
    ============================================================================= */
 const fs = require('fs'), path = require('path');
 const { execFileSync } = require('child_process');
-const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = require('./_chrome.js').requireChrome();
 const ROOT = path.resolve(__dirname, '..');
 const PAGE = path.join(ROOT, '_t_follow.html');
 

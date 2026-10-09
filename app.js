@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '20.0.0';
+const APP_VERSION = '21.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -327,6 +327,8 @@ const state = {
    ولا تُختم عند المزامنة نفسها (فالمزامنة ليست تعديلاً).
    ============================================================================= */
 const LS_SYNCMETA = 'admh.sync.meta.v1';
+/* سجل التعديلات — لقطات قابلة للاستعادة */
+const LS_HISTORY = 'admh.history.v1';
 
 /** يُنشئ بنية وصفية فارغة */
 function blankSyncMeta() {
@@ -503,9 +505,215 @@ let draftTimer = null;
 function saveDraft() {
   clearTimeout(draftTimer);
   draftTimer = setTimeout(() => {
-    jwrite(LS_DRAFT, { report: state.report, editingId: state.editingId, at: Date.now() });
+    const draft = { report: state.report, editingId: state.editingId, at: Date.now() };
+    jwriteSilent(LS_DRAFT, draft);
     /* المؤشر في الشريط العلوي مخصّص لحالة المزامنة، فلا نلمسه هنا. */
+
+    /* ---------------------------------------------------------------------
+       مزامنة المسودة
+       ---------------------------------------------------------------------
+       المسودة كانت محلية فقط، فلا يظهر ما لم يُحفظ في الأرشيف على الجهاز
+       الآخر. الآن نُعلّم وقت تعديلها لتُزامَن مثل بقية المجموعات.
+       --------------------------------------------------------------------- */
+    stampLocalChange('draft');
+    scheduleDraftPush();
+
+    /* لقطة في سجل التعديلات — بفاصل زمني يمنع سجلاً لكل ضغطة مفتاح */
+    recordHistory('تعديل');
   }, 500);
+}
+
+/* =============================================================================
+   مزامنة المسودة — دفع مؤجّل ومهذّب
+   =============================================================================
+   المسودة تتغيّر مع كل ضغطة مفتاح، فدفعها فوراً يُغرق الشبكة. نؤجّل الدفع
+   فترة (`DRAFT_PUSH_MS`) ثم نُرسل أحدث نسخة مرة واحدة.
+   ============================================================================= */
+const DRAFT_PUSH_MS = 12000;
+let draftPushTimer = null;
+
+/** يجدول دفعاً مؤجّلاً للمسودة — بلا إغراق الشبكة */
+function scheduleDraftPush() {
+  if (!sync.available()) return;
+  const S = sync.get();
+  if (!S || !S.status().connected) return;      /* بلا اتصال: تُزامَن لاحقاً */
+  clearTimeout(draftPushTimer);
+  draftPushTimer = setTimeout(() => {
+    draftPushTimer = null;
+    try {
+      if (S.pushDraft) S.pushDraft();
+    } catch (e) { /* الدفع المؤجّل تحسين لا أكثر */ }
+  }, DRAFT_PUSH_MS);
+}
+
+/* =============================================================================
+   سجل التعديلات
+   ============================================================================= */
+const HIST = () => (window.ADMHReport && window.ADMHReport.history) || null;
+
+/** السجل المخزَّن (يُقرأ مرة ويُبقى في الذاكرة) */
+let historyCache = null;
+
+function readHistory() {
+  const H = HIST();
+  if (!H) return { reports: {}, version: 1 };
+  if (historyCache) return historyCache;
+  historyCache = H.normalize(jread(LS_HISTORY, null));
+  return historyCache;
+}
+
+function writeHistory(hist, silent) {
+  historyCache = hist || historyCache;
+  return silent ? jwriteSilent(LS_HISTORY, historyCache) : jwrite(LS_HISTORY, historyCache);
+}
+
+/**
+ * يسجّل لقطة من التقرير الحالي.
+ * @param {string} reason سبب اللقطة (يظهر للمستخدم)
+ * @param {boolean} [force] يتجاوز الفاصل الزمني (للأحداث المهمة)
+ */
+function recordHistory(reason, force) {
+  const H = HIST();
+  if (!H || !state.report) return false;
+  const hist = readHistory();
+  const before = H.count(hist);
+  H.record(hist, state.report, { reason: reason || 'تعديل', force: !!force });
+  const after = H.count(hist);
+  if (after !== before) writeHistory(hist, true);
+  renderHistoryView();
+  return after !== before;
+}
+
+/** يستعيد نسخة سابقة إلى المحرّر */
+function restoreHistory(entryId) {
+  const H = HIST();
+  if (!H || !state.report) return false;
+  const id = state.report.id;
+  const snap = H.snapshotOf(readHistory(), id, entryId);
+  if (!snap) { toast('لم تُوجد النسخة', 'warn'); return false; }
+
+  /* نحفظ الوضع الحالي أولاً، فلا تفقد ما أنت عليه الآن */
+  recordHistory('قبل الاستعادة', true);
+
+  state.report = migrate(snap);
+  state.editingId = state.report.id;
+  saveDraft();
+  renderAll();
+  toast('استُعيدت النسخة السابقة ✓', 'ok');
+  renderHistoryView();
+  return true;
+}
+
+/** يحذف سجل تقرير (عند حذف التقرير) */
+function dropHistory(reportId) {
+  const H = HIST();
+  if (!H || !reportId) return false;
+  const hist = readHistory();
+  const ok = H.dropReport(hist, reportId);
+  if (ok) writeHistory(hist, true);
+  return ok;
+}
+
+/** يرسم قائمة النسخ السابقة */
+function renderHistoryView() {
+  const H = HIST();
+  const box = $('#histList');
+  if (!H || !box || !state.report) return;
+
+  const list = H.listFor(readHistory(), state.report.id);
+  const stats = $('#histStats');
+
+  if (!list.length) {
+    box.innerHTML = '<p class="empty">لا نسخ محفوظة بعد. تُسجَّل نسخة تلقائياً كل دقيقة تقريباً وعند الحفظ.</p>';
+    if (stats) stats.textContent = '';
+    return;
+  }
+
+  box.innerHTML = list.map((e, i) => {
+    const d = new Date(e.at);
+    const when = isNaN(d.getTime()) ? '' :
+      `${fmtDate(e.at.slice(0, 10))} — ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    /* نقارن كل لقطة بالتي بعدها (الأقدم) لنُظهر ما تغيّر */
+    const older = list[i + 1];
+    const changes = older ? H.diff(older.snapshot, e.snapshot) : [];
+    const chTxt = changes.length
+      ? changes.slice(0, 4).map(c => `<span class="pill">${esc(c.label)}</span>`).join(' ') +
+        (changes.length > 4 ? ` <span class="pill">+${changes.length - 4}</span>` : '')
+      : '<span class="hint">النسخة الأولى</span>';
+
+    return `
+      <div class="hist" data-hist="${esc(e.id)}">
+        <div class="top">
+          <span class="when">${esc(when)}</span>
+          <span class="badge histb">${esc(e.reason || 'تعديل')}</span>
+          <span class="grow"></span>
+          <button class="btn ghost sm" data-histview="${esc(e.id)}">👁️ عرض</button>
+          <button class="btn warn sm" data-histrestore="${esc(e.id)}">↩ استعادة</button>
+        </div>
+        <div class="meta">${esc(e.title || e.facility || 'بدون عنوان')}</div>
+        <div class="chg">${chTxt}</div>
+      </div>`;
+  }).join('');
+
+  if (stats) {
+    stats.textContent = `${list.length} نسخة محفوظة`;
+  }
+}
+
+/** يعرض لقطة في نافذة منفصلة (طباعة/معاينة) */
+function previewHistory(entryId) {
+  const H = HIST();
+  if (!H || !state.report) return;
+  const snap = H.snapshotOf(readHistory(), state.report.id, entryId);
+  if (!snap) { toast('لم تُوجد النسخة', 'warn'); return; }
+
+  /* نبني معاينة مؤقتة من اللقطة عبر النموذج */
+  const cur = state.report;
+  try {
+    state.report = migrate(snap);
+    const M = ADMHReport.buildModel();
+    const w = window.open('', '_blank');
+    if (!w) { toast('المتصفح منع فتح النافذة', 'warn'); return; }
+    const H2 = [];
+    H2.push('<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8">');
+    H2.push('<title>نسخة سابقة — ' + (M.title || '') + '</title>');
+    H2.push('<style>body{font-family:"Simplified Arabic",Tahoma,sans-serif;direction:rtl;padding:24px;line-height:1.9}');
+    H2.push('h1{font-size:1.3em;color:#004d40;text-align:center}h2{font-size:1.05em;color:#004d40;border-bottom:1px solid #00796b;padding-bottom:3px}');
+    H2.push('p{margin:5px 0}.hdr{text-align:center;border-bottom:3px double #004d40;padding-bottom:10px}</style></head><body>');
+    H2.push('<div class="hdr">');
+    [M.header.l1, M.header.l2, M.header.l3].filter(Boolean).forEach(l => H2.push('<div>' + esc(l) + '</div>'));
+    H2.push('<h1>' + esc(M.title) + '</h1>');
+    if (M.meta.length) H2.push('<div>' + M.meta.map(m => '<b>' + esc(m[0]) + ':</b> ' + esc(m[1])).join(' | ') + '</div>');
+    H2.push('</div><p>' + esc(M.intro) + '</p>');
+    M.sections.forEach(s => {
+      if (!s.heading) return;
+      H2.push('<h2>' + esc(s.heading) + '</h2>');
+      if (s.type === 'kv') {
+        (s.rows || []).forEach(r => H2.push('<p><b>' + esc(r[0]) + ':</b> ' + esc(r[1]) + '</p>'));
+        (s.notes || []).forEach(n => H2.push('<p>' + esc(n) + '</p>'));
+      } else if (s.type === 'list') {
+        (s.items || []).forEach(i => H2.push('<p>' + esc(i) + '</p>'));
+      } else if (s.type === 'recs') {
+        s.groups.forEach(g => {
+          H2.push('<p><b>' + esc(g.intro || g.label) + '</b></p>');
+          g.items.forEach((it, i) => H2.push('<p>' + (i + 1) + '- ' + esc(it) + '</p>'));
+        });
+      } else if (s.type === 'positions') {
+        s.blocks.forEach(b => {
+          H2.push('<p>' + esc(b.intro) + '</p>');
+          b.cats.forEach(c => {
+            H2.push('<p><b>' + esc(c.title) + ':</b></p>');
+            c.items.forEach(it => H2.push('<p>' + esc(it) + '</p>'));
+          });
+        });
+      }
+    });
+    H2.push('</body></html>');
+    w.document.write(H2.join(''));
+    w.document.close();
+  } finally {
+    state.report = cur;      /* نُعيد التقرير الحالي دائماً */
+  }
 }
 /**
  * يحفظ التقرير الحالي في الأرشيف.
@@ -533,6 +741,8 @@ function saveToArchive(silent) {
           'ثم احذف تقارير قديمة وفَرّغ مساحة.', 'err', 20000);
     return false;
   }
+  /* لقطة إجبارية عند الحفظ — فالحفظ حدث مهم يستحق نسخة */
+  recordHistory('الحفظ في الأرشيف', true);
   if (!silent) toast('تم الحفظ في الأرشيف', 'ok');
   return true;
 }
@@ -1336,6 +1546,33 @@ function bindButtons() {
   bindFollowUps();
   /* سحب توصيات المؤسسة من سجل التوصيات إلى هذا التقرير */
   bindOn('#btnPullPrevRecs', () => pullPreviousRecs());
+
+  /* سجل التعديلات */
+  bindOn('#btnHistNow', () => {
+    if (recordHistory('لقطة يدوية', true)) toast('حُفظت نسخة ✓', 'ok');
+    else toast('لا تغيير يستحق نسخة جديدة', 'warn');
+  });
+  bindOn('#btnHistClear', () => {
+    if (!state.report) return;
+    if (!confirm('حذف سجل تعديلات هذا التقرير؟ لن تتأثر النسخ المحفوظة في الأرشيف.')) return;
+    if (dropHistory(state.report.id)) { toast('حُذف السجل', 'ok'); renderHistoryView(); }
+  });
+  /* أزرار اللقطات — تفويض على الحاوي (تتغيّر مع كل رسم) */
+  (function () {
+    const box = $('#histList');
+    if (!box) return;
+    box.addEventListener('click', (e) => {
+      const v = e.target.closest('[data-histview]');
+      if (v) { previewHistory(v.getAttribute('data-histview')); return; }
+      const r = e.target.closest('[data-histrestore]');
+      if (r) {
+        const id = r.getAttribute('data-histrestore');
+        if (confirm('استعادة هذه النسخة؟ سيُحفظ وضعك الحالي كنسخة أولاً فلا تفقد شيئاً.')) {
+          restoreHistory(id);
+        }
+      }
+    });
+  })();
 
   /* الأرشيف */
   bindOn('#btnExportAll', exportArchiveJSON);
@@ -2247,9 +2484,11 @@ function renderArchive() {
       }
       jwrite(LS_REPORTS, state.reports);
       refreshArchiveMeta();
-  /* التقارير تغيّرت — نُعيد بناء سجل التوصيات وأعداد المتابعة */
-  if (typeof rebuildRegistry === 'function') rebuildRegistry();
-  renderArchive(); toast('تم الحذف', 'ok');
+      /* التقارير تغيّرت — نُعيد بناء سجل التوصيات وأعداد المتابعة */
+      if (typeof rebuildRegistry === 'function') rebuildRegistry();
+      /* يُحذف سجل تعديلات التقرير المحذوف (تبقى اللقطات بلا صاحب) */
+      if (typeof dropHistory === 'function') dropHistory(id);
+      renderArchive(); toast('تم الحذف', 'ok');
     }
   };
   $('#archStats').textContent = `المعروض: ${list.length} من ${state.reports.length}`;
@@ -2419,6 +2658,9 @@ function initSync() {
       /* سجل المؤسسات ودورة حياة التوصيات — يُزامَن مع بقية البيانات */
       registryAt: localStamp('registry'),
       registry: readRegistry(),
+      /* المسودة الحالية: تُزامَن ليكمل العمل على الجهاز الآخر */
+      draft: { report: state.report, editingId: state.editingId, at: Date.now() },
+      draftAt: localStamp('draft'),
       /* أوقات آخر مزامنة — تميّز «الجديد عند الطرفين» من «الجديد عند طرف واحد» */
       synced: Object.assign({}, syncMeta.synced || {}),
     }),
@@ -2461,6 +2703,36 @@ function initSync() {
           jwriteSilent(LS_REGISTRY, registryCache);
           updateFollowCounts();
         }
+      }
+      /* -----------------------------------------------------------------
+         المسودة الواردة من السحابة
+         -----------------------------------------------------------------
+         لا نطمس ما بين يديك بلا علمك: نُحمّلها فقط إن لم تكن تعمل على
+         تعديل محلي أحدث. وإن كانت أحدث، نُعلمك ونترك القرار لك.
+         ----------------------------------------------------------------- */
+      if (payload.draftFromCloud && payload.draft && payload.draft.report) {
+        const localDraftAt = Date.parse(localStamp('draft') || 0) || 0;
+        const cloudAt = Date.parse(payload.draftAt || 0) || 0;
+        /* هل التقرير الحالي فيه عمل غير محفوظ؟ */
+        const dirty = !!(state.report && (
+          tidy(state.report.facilityName) ||
+          (state.report.recGroups || []).some(g => (g.items || []).some(tidy)) ||
+          (state.report.records || []).some(r => tidy(r.name))
+        ));
+        if (!dirty || cloudAt > localDraftAt) {
+          state.report = migrate(payload.draft.report);
+          state.editingId = payload.draft.editingId || state.report.id;
+          jwriteSilent(LS_DRAFT, payload.draft);
+          markSynced('draft', new Date(cloudAt || Date.now()).toISOString());
+          renderAll();
+          toast('استُؤنفت المسودة من جهاز آخر', 'ok', 5000);
+        } else {
+          toast('توجد مسودة أحدث على جهاز آخر — لم أستبدل ما تعمل عليه. راجعها هناك أو ابدأ تقريراً جديداً لسحبها.', 'warn', 12000);
+        }
+      }
+      /* لقطة في السجل عند وصول تقرير من السحابة */
+      if (Array.isArray(payload.reports) && typeof recordHistory === 'function') {
+        recordHistory('مزامنة', false);
       }
       const st = S.status();
       if (st && st.lastSync) state.lastSyncSync = st.lastSync;
@@ -2782,6 +3054,12 @@ function init() {
   const car = $('#archCount'); if (car) car.textContent = state.reports.length;
   /* نبني سجل التوصيات من التقارير فور الإقلاع، فتظهر أعداد المتابعة صحيحة */
   rebuildRegistry();
+  /* نُنظّف سجل التعديلات من القديم ونرسمه */
+  if (typeof readHistory === 'function') {
+    const H = HIST();
+    if (H) { writeHistory(H.prune(readHistory(), { now: new Date() }), true); }
+    renderHistoryView();
+  }
   renderSyncUI({ configured: false, connected: false });
   setTimeout(initSync, 300);
 
@@ -3473,6 +3751,9 @@ const API = {
   renderFacilities, openFacility, renderRecs, renderRecCards, renderDash,
   bindFollowUps, openReportById, pullPreviousRecs, handleRecEdit,
   applyDashPreset, syncDashPreset,
+  /* سجل التعديلات */
+  readHistory, writeHistory, recordHistory, restoreHistory, dropHistory,
+  renderHistoryView, previewHistory, scheduleDraftPush,
 };
 if (typeof window !== 'undefined') window.ADMH = API;
 if (typeof module !== 'undefined' && module.exports) module.exports = API;

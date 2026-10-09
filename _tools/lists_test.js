@@ -4,7 +4,7 @@
 const fs = require('fs'), path = require('path');
 const { execFileSync } = require('child_process');
 
-const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = require('./_chrome.js').requireChrome();
 const PROBE = path.resolve(__dirname, 'lists_probe.html');
 
 const html = `<!DOCTYPE html>

@@ -1,0 +1,92 @@
+# =============================================================================
+# التشغيل الآلي — GitHub Actions
+# =============================================================================
+# يشغّل فحص الصياغة ثم كل الاختبارات (وحدات + متصفح) عند كل رفع وطلب دمج.
+#
+# لماذا Chrome على runner؟ اختبارات المتصفح تفحص ما يراه المستخدم فعلاً:
+# رسم الواجهة، ربط الأزرار، أوضاع النسخ، وتصدير Word. ولا يمكن الاستغناء
+# عنها باختبارات الوحدات وحدها — فقد سبق أن مرّ عطل «الزر ينسخ بلا خيارات»
+# من كل اختبارات الوحدات، وكشفته اختبارات المتصفح فقط.
+# =============================================================================
+
+name: الاختبارات
+
+on:
+  push:
+    branches: [main, 'feature/**', 'fix/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# نُلغي التشغيل القديم عند رفع جديد على الفرع نفسه — توفيراً للوقت
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # ١) فحص سريع: الصياغة فقط. يفشل في ثوانٍ ويكشف الأخطاء الواضحة فوراً.
+  # ---------------------------------------------------------------------------
+  syntax:
+    name: فحص الصياغة
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: فحص صياغة كل الملفات
+        run: node _tools/syntax_check.js
+
+  # ---------------------------------------------------------------------------
+  # ٢) الوحدات: منطق خالص بلا متصفح — سريع جداً
+  # ---------------------------------------------------------------------------
+  unit:
+    name: اختبارات الوحدات
+    runs-on: ubuntu-latest
+    needs: syntax
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: تشغيل اختبارات الوحدات
+        run: node _tools/run_all.js --group unit
+
+  # ---------------------------------------------------------------------------
+  # ٣) المتصفح: Chrome حقيقي
+  # ---------------------------------------------------------------------------
+  browser:
+    name: اختبارات المتصفح
+    runs-on: ubuntu-latest
+    needs: syntax
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: تثبيت Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: تشغيل اختبارات المتصفح
+        env:
+          # الاختبارات تكتشف Chrome من هذا المتغيّر إن وُجد
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: node _tools/run_all.js --group browser
+
+      - name: رفع تقرير JSON عند الفشل
+        if: failure()
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: node _tools/run_all.js --group browser --json > test-report.json || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: تقرير-الاختبارات
+          path: test-report.json
+          if-no-files-found: ignore

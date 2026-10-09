@@ -1,0 +1,36 @@
+{
+  "name": "admh-inspection-reporting-system",
+  "version": "21.0.0",
+  "private": true,
+  "description": "نظام التقارير التفتيشية — إدخال بيانات الزيارة التفتيشية وزيارات المتابعة وتصدير تقرير Word بقالب جاهز، مع أرشيف ومزامنة اختيارية.",
+  "keywords": [
+    "inspection",
+    "reporting",
+    "arabic",
+    "rtl",
+    "docx",
+    "offline-first",
+    "pwa"
+  ],
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node _tools/run_all.js",
+    "test:fast": "node _tools/run_all.js --fast",
+    "test:list": "node _tools/run_all.js --list",
+    "test:unit": "node _tools/run_all.js --group unit",
+    "test:browser": "node _tools/run_all.js --group browser",
+    "lint:syntax": "node _tools/syntax_check.js",
+    "check": "npm run lint:syntax && npm test",
+    "serve": "node _tools/serve.js"
+  },
+  "devDependencies": {},
+  "comments": {
+    "tests": "لا تبعيات خارجية إطلاقاً: كل الاختبارات بـNode المدمج ومتصفح Chrome مباشرةً.",
+    "chrome": "اختبارات المتصفح تحتاج Chrome. يُكتشف تلقائياً من المواضع المعتادة، أو مرّر CHROME_PATH.",
+    "no_build": "المشروع بلا خطوة بناء — الملفات تُخدَم كما هي من Cloudflare Pages."
+  }
+}

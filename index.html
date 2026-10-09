@@ -263,6 +263,20 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 .rec .note{margin-top:9px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:7px}
 .rec .note input{width:100%}
 
+/* سجل التعديلات */
+.hist{border:1px solid var(--border);border-radius:10px;padding:9px 12px;margin-bottom:7px;background:var(--card,#fff)}
+.hist .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.hist .top .grow{flex:1}
+.hist .when{font-size:.82em;color:var(--muted);font-variant-numeric:tabular-nums}
+.hist .meta{font-size:.9em;margin-top:4px}
+.hist .chg{margin-top:5px;display:flex;gap:5px;flex-wrap:wrap;align-items:center}
+.badge.histb{background:#00658f}
+.hist:first-child{border-color:var(--accent,#00796b)}
+@media(max-width:640px){
+  .hist .top .btn{flex:1}
+  .rec .note{grid-template-columns:1fr}
+}
+
 .badge{display:inline-block;border-radius:999px;padding:2px 9px;font-size:.75em;font-weight:600;color:#fff;white-space:nowrap}
 .badge.pending{background:#b3261e}
 .badge.progress{background:#b26a00}
@@ -428,8 +442,7 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 
     <main class="main">
 
-      <!-- ============ REPORT ============ -->
-      <section id="view-report">
+      <!-- ============ REPORT ============ -->      <section id="view-report">
         <div class="bar no-print">
           <div class="grow">
             <label for="reportTitleBox">عنوان التقرير</label>
@@ -675,6 +688,19 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             <label for="f_footerNote">ملاحظة أسفل التقرير</label>
             <input type="text" id="f_footerNote" placeholder="اختياري">
           </div>
+        </div>
+
+        <!-- سجل التعديلات — لقطات قابلة للاستعادة -->
+        <div class="card no-print" id="cardHistory">
+          <h2>🕘 <span class="num">12</span> سجل التعديلات</h2>
+          <p class="sub">نسخ محفوظة تلقائياً من هذا التقرير. تُسجَّل نسخة كل دقيقة تقريباً
+            وعند الحفظ. الاستعادة تحفظ وضعك الحالي أولاً، فلا تفقد شيئاً.</p>
+          <div class="btnrow" style="margin-bottom:8px">
+            <button class="btn ghost sm" id="btnHistNow" type="button">📌 احفظ نسخة الآن</button>
+            <button class="btn danger sm" id="btnHistClear" type="button">🗑️ احذف سجل هذا التقرير</button>
+          </div>
+          <div id="histList"></div>
+          <p class="hint" id="histStats"></p>
         </div>
 
         <div class="btnrow no-print" style="margin-bottom:30px">
@@ -1131,6 +1157,8 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 <script src="app.js"></script>
 <!-- سجل المؤسسات ودورة حياة التوصيات — وحدة مستقلة -->
 <script src="registry.js"></script>
+<!-- سجل التعديلات واستعادة النسخ — وحدة مستقلة -->
+<script src="history.js"></script>
 <script src="report-model.js"></script>
 <script src="report-preview.js"></script>
 <script src="report-clipboard.js"></script>

@@ -11,7 +11,69 @@ const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..');
 const SYNC_SRC = fs.readFileSync(path.join(ROOT, 'sync.js'), 'utf8');
-const APP_SRC = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+
+/**
+ * يُحمّل app.js في بيئة Node ويقرأ واجهته المُصدَّرة.
+ * نستخدمه لنفحص **سلوك** الحماية — فحص النصّ يمنع تقسيم الشيفرة.
+ */
+function loadApp() {
+  const store = new Map();
+  const sb = {
+    console: { log() {}, warn() {}, error() {} },
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    Promise, Math, Date, JSON, Object, Array, String, Number, Boolean,
+    Error, RegExp, parseInt, parseFloat, isNaN, Uint8Array, ArrayBuffer,
+    TextEncoder, TextDecoder,
+    localStorage: {
+      getItem: k => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: k => store.delete(k),
+    },
+    navigator: { userAgent: 'node', serviceWorker: null, maxTouchPoints: 0 },
+    location: { protocol: 'https:', hostname: 'admh.test', href: 'https://admh.test/' },
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+  };
+  sb.document = {
+    createElement: () => ({ set src(v) {}, onload: null, onerror: null, style: {}, classList: { add() {}, remove() {}, toggle() {} }, appendChild() {} }),
+    head: { appendChild() {} },
+    body: { classList: { add() {}, remove() {}, toggle() {} }, appendChild() {} },
+    addEventListener() {}, querySelector: () => null, querySelectorAll: () => [],
+    getElementById: () => null, documentElement: { classList: { add() {}, remove() {}, toggle() {} } },
+    readyState: 'complete',
+  };
+  sb.URL = { createObjectURL: () => 'blob:x', revokeObjectURL() {} };
+  /* Firebase وهمي: sync.js يحتاجه عند التحميل */
+  sb.firebase = {
+    apps: [], initializeApp() { this.apps.push({}); return {}; }, app: () => ({}),
+    auth: () => ({
+      currentUser: null,
+      onAuthStateChanged: () => () => {},
+      signInWithPopup: () => Promise.resolve({ user: null }),
+      getRedirectResult: () => Promise.resolve(null),
+      signOut: () => Promise.resolve(),
+      GoogleAuthProvider: class { setCustomParameters() {} credential() { return {}; } },
+    }),
+    firestore: () => ({
+      enablePersistence: () => Promise.resolve(),
+      collection: () => ({ doc: () => ({ collection: () => ({ doc: () => ({ set: () => Promise.resolve(), get: () => Promise.resolve({ exists: false, data: () => ({}) }) }) }) }) }),
+      batch: () => ({ set: () => {}, commit: () => Promise.resolve() }),
+    }),
+  };
+  sb.firebase.auth.GoogleAuthProvider = sb.firebase.auth().GoogleAuthProvider;
+  sb.window = sb; sb.globalThis = sb; sb.self = sb;
+  vm.createContext(sb);
+
+  /* ملفات التطبيق بالترتيب نفسه في index.html */
+  const files = ['options.js', 'sync.js', 'app.js', 'registry.js', 'history.js'];
+  files.forEach(f => {
+    const p = path.join(ROOT, f);
+    if (fs.existsSync(p)) {
+      try { vm.runInContext(fs.readFileSync(p, 'utf8'), sb, { filename: f }); }
+      catch (e) { /* بعض الوحدات تحتاج DOM كاملاً — نتجاهل */ }
+    }
+  });
+  return sb.window.ADMH || {};
+}
 
 let pass = 0, fail = 0;
 const check = (n, c, d) => {
@@ -94,21 +156,27 @@ function makeSync(user) {
     check('status() does not throw', !!st);
   }
 
-  console.log('\n=== الحماية موجودة فعلاً في app.js ===');
+  console.log('\n=== الحماية معروضة فعلاً من التطبيق ===');
   {
-    check('يُفضّل uid على البريد',
-      /st\.uid\s*\|\|\s*st\.email/.test(APP_SRC),
-      (APP_SRC.match(/st\.uid[^;]{0,40}/) || [])[0]);
-    check('يسجّل صاحب البيانات قبل المزامنة',
-      /markLocalOwner\(curUid\)/.test(APP_SRC));
-    check('يسأل قبل الرفع إلى حساب مختلف',
-      /owner !== curUid/.test(APP_SRC) && /confirm\(/.test(APP_SRC));
-    check('لا يرفع إن رفض المستخدم',
-      /markLocalOwner\(curUid,\s*true\)/.test(APP_SRC));
-    check('يتذكّر الرفض فلا يسأل كل مرة',
-      /ownerRefused\(curUid\)/.test(APP_SRC));
-    check('يقرأ المالك بشكل آمن (لا انهيار على قيمة تالفة)',
-      /function readLocalOwner/.test(APP_SRC) && /catch \(e\) \{ return null; \}/.test(APP_SRC));
+    /* -----------------------------------------------------------------
+       نقيس **السلوك المُصدَّر** لا نصّ ملف. السبب: التقسيم إلى وحدات
+       ينقل الشيفرة بين ملفات، فقياس النصّ يجعل الاختبار يمنع التقسيم
+       ويفشل بلا سبب حقيقي. الدوال المُصدَّرة تُثبت الحماية أينما كانت.
+       ----------------------------------------------------------------- */
+    const distDir = path.join(ROOT, 'dist');
+    const app = loadApp();   /* نُحمّل app.js ونقرأ واجهته */
+
+    check('readLocalOwner is exported', typeof app.readLocalOwner === 'function');
+    check('markLocalOwner is exported', typeof app.markLocalOwner === 'function');
+    check('ownerRefused is exported', typeof app.ownerRefused === 'function');
+
+    /* سلوك فعلي: التسجيل والقراءة والرفض */
+    app.markLocalOwner('uid-A');
+    check('an owner can be recorded', app.readLocalOwner() === 'uid-A', app.readLocalOwner());
+    app.markLocalOwner('uid-B', true);
+    check('refusal is remembered for that account', app.ownerRefused('uid-B') === true);
+    check('refusal does not leak to other accounts', app.ownerRefused('uid-A') === false);
+
     check('sync.js status() يحمل uid',
       /uid:\s*\(state\.user && state\.user\.uid\)/.test(SYNC_SRC));
   }

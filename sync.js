@@ -883,6 +883,34 @@
     return settingsDoc().get().then(d => (d.exists ? d.data() : null)).catch(() => null);
   }
 
+  /* ------------------------- المسودة: دفع مستقل مهذّب
+     المسودة تتغيّر مع كل ضغطة مفتاح، فلا تصلح ضمن الحمولة العادية.
+     لها مستند خاص ودفع مؤجّل يمنع إغراق الشبكة. */
+  function draftDoc() { return fb.db.collection('users').doc(state.user.uid).collection('meta').doc('draft'); }
+
+  function pullDraft() {
+    return draftDoc().get()
+      .then(d => (d.exists ? d.data() : null))
+      .catch(() => null);
+  }
+
+  /** يدفع المسودة الحالية إلى السحابة */
+  function pushDraft() {
+    ensureInit();
+    if (!state.connected || !state.user) return Promise.resolve({ skipped: true });
+    const loaded = (hooks.load && hooks.load()) || {};
+    if (!loaded.draft) return Promise.resolve({ skipped: true });
+    const stamp = new Date().toISOString();
+    return draftDoc().set({
+      draft: loaded.draft,
+      updatedAt: stamp,
+      device: state.device,
+    }, { merge: true }).then(() => {
+      setState({ lastDraftPush: stamp });
+      return { ok: true, at: stamp };
+    });
+  }
+
   /* --------------------------------------------------------- مزامنة كاملة */
   function syncNow(opts) {
     opts = opts || {};
@@ -971,61 +999,79 @@
           'registry', local.registry, (remotePayload && remotePayload.registry) || null,
           Date.parse(local.registryAt || 0) || 0, remoteAt);
 
-        if (settingsChanged2.value) {
-          out.settings = mergedSettings;
-          out.library = mergedLibrary;
-          out.lists = mergedLists;
-          out.registry = mergedRegistry;
-          settingsChanged = true;
-        }
-        /* نُبلّغ عن التعارض ليُعرض للمستخدم بدل أن يضيع بصمت */
-        if (conflicts.length) {
-          out.conflicts = conflicts;
-          out.conflictNotice =
-            'تعارض في: ' + conflicts.map(c =>
-              c === 'settings' ? 'الإعدادات'
-              : c === 'library' ? 'مكتبة العبارات'
-              : c === 'registry' ? 'سجل التوصيات'
-              : 'القوائم'
-            ).join(' · ') + ' — أُبقيت نسختك المحلية وستُرفع. راجعها على الجهاز الآخر.';
-        }
+        /* -----------------------------------------------------------------
+           المسودة: لها مستند خاص، وتُدمج بمنطق «الأحدث يفوز» مع تحفّظ.
+           -----------------------------------------------------------------
+           لا نستبدل مسودة محلية غير محفوظة أبداً إن كان تعديلها أحدث — فأنت
+           تعمل عليها الآن. وإن كانت مسودة الطرف الآخر أحدث، نُعلّم بوجودها
+           ولا نطمس ما بين يديك بلا علمك.
+           ----------------------------------------------------------------- */
+        return pullDraft().then(remoteDraft => {
+          const localDraftAt = Date.parse((local.draft && local.draft.at) || 0) || 0;
+          const remoteDraftAt = Date.parse((remoteDraft && remoteDraft.updatedAt) || 0) || 0;
+          if (remoteDraft && remoteDraft.draft && remoteDraftAt > localDraftAt) {
+            out.draft = remoteDraft.draft;
+            out.draftFromCloud = true;
+            out.draftAt = remoteDraft.updatedAt;
+          }
 
-        /* أوقات المزامنة الجديدة لهذه الجولة */
-        out.synced = {
-          settings: nowIso,
-          library: nowIso,
-          lists: nowIso,
-          registry: nowIso,
-        };
+          if (settingsChanged2.value) {
+            out.settings = mergedSettings;
+            out.library = mergedLibrary;
+            out.lists = mergedLists;
+            out.registry = mergedRegistry;
+            settingsChanged = true;
+          }
+          /* نُبلّغ عن التعارض ليُعرض للمستخدم بدل أن يضيع بصمت */
+          if (conflicts.length) {
+            out.conflicts = conflicts;
+            out.conflictNotice =
+              'تعارض في: ' + conflicts.map(c =>
+                c === 'settings' ? 'الإعدادات'
+                : c === 'library' ? 'مكتبة العبارات'
+                : c === 'registry' ? 'سجل التوصيات'
+                : 'القوائم'
+              ).join(' · ') + ' — أُبقيت نسختك المحلية وستُرفع. راجعها على الجهاز الآخر.';
+          }
 
-        const toPush = mergedReports.filter(r => {
-          const rem = remote.find(x => x.id === r.id);
-          if (!rem) return true;
-          const lt = Date.parse(r.updatedAt || 0) || 0;
-          const rt = Date.parse(rem.updatedAt || 0) || 0;
-          return lt > rt;
-        });
+          /* أوقات المزامنة الجديدة لهذه الجولة */
+          out.synced = {
+            settings: nowIso,
+            library: nowIso,
+            lists: nowIso,
+            registry: nowIso,
+          };
 
-        return pushReports(toPush)
-          .then(() => pushSettings({
-            payload: {
-              settings: mergedSettings,
-              library: mergedLibrary,
-              lists: mergedLists,
-              registry: mergedRegistry,
-            },
-          }))
-          .then(() => {
-            hooks.save(out);
-            const stamp = new Date().toISOString();
-            jwrite(LS_LAST, stamp);
-            setState({ busy: false, lastSync: stamp, error: '' });
-            return {
-              added, updated, removed, pushed: toPush.length,
-              total: mergedReports.length, settingsChanged,
-              conflicts: conflicts, conflictNotice: out.conflictNotice || '',
-            };
+          const toPush = mergedReports.filter(r => {
+            const rem = remote.find(x => x.id === r.id);
+            if (!rem) return true;
+            const lt = Date.parse(r.updatedAt || 0) || 0;
+            const rt = Date.parse(rem.updatedAt || 0) || 0;
+            return lt > rt;
           });
+
+          return pushReports(toPush)
+            .then(() => pushSettings({
+              payload: {
+                settings: mergedSettings,
+                library: mergedLibrary,
+                lists: mergedLists,
+                registry: mergedRegistry,
+              },
+            }))
+            .then(() => {
+              hooks.save(out);
+              const stamp = new Date().toISOString();
+              jwrite(LS_LAST, stamp);
+              setState({ busy: false, lastSync: stamp, error: '' });
+              return {
+                added, updated, removed, pushed: toPush.length,
+                total: mergedReports.length, settingsChanged,
+                conflicts: conflicts, conflictNotice: out.conflictNotice || '',
+                draftFromCloud: !!out.draftFromCloud,
+              };
+            });
+        });
       });
     }).catch(err => {
       const msg = friendlyError(err);
@@ -1169,6 +1215,9 @@
     ensureInit,
     signOut,
     syncNow,
+    /* المسودة: دفع مستقل مهذّب + سحب */
+    pushDraft,
+    pullDraft,
     pushPullRequest,
     parseConfigInput,
     normalizeConfig,

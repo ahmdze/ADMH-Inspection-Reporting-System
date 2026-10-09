@@ -8,7 +8,7 @@
 const fs = require('fs'), path = require('path');
 const { execFileSync, spawn } = require('child_process');
 
-const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = require('./_chrome.js').requireChrome();
 const PY = 'C:\\Users\\ahmdz\\.dsh\\dsh-runtimes\\dsh-primary-runtime\\dependencies\\python\\python.exe';
 const ROOT = path.resolve(__dirname, '..');
 const PROBE = path.join(ROOT, '_vis_probe.html');
@@ -72,9 +72,36 @@ function buildPage(code) {
   return out;
 }
 
+/**
+ * ينتظر أن يستجيب خادم الاختبار فعلاً.
+ * -----------------------------------------------------------------------------
+ * كان هناك `setTimeout(1800)` ثابت قبل أول طلب. وهذا يهتزّ تحت الحِمل: عند
+ * تشغيل مجموعات كثيرة بالتوازي يبطؤ إقلاع الخادم، فيفشل الاختبار بلا عيب حقيقي.
+ * الآن نستطلع الخادم حتى يستجيب، بحدّ أقصى معقول.
+ */
+function waitForServer(url, timeoutMs) {
+  const net = require('net');
+  const t0 = Date.now();
+  const { hostname, port } = new URL(url);
+  return new Promise((resolve, reject) => {
+    (function attempt() {
+      const sock = net.connect({ host: hostname, port: +port });
+      let done = false;
+      sock.on('connect', () => { done = true; sock.destroy(); resolve(); });
+      sock.on('error', () => {
+        if (done) return;
+        sock.destroy();
+        if (Date.now() - t0 > (timeoutMs || 15000)) reject(new Error('الخادم لم يستجب'));
+        else setTimeout(attempt, 150);
+      });
+    })();
+  });
+}
+
 const server = spawn(PY, ['-m', 'http.server', '8231', '--bind', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
 
-setTimeout(() => {
+/* ننتظر الخادم فعلاً بدل توقيت ثابت — كان يهتزّ تحت الحِمل */
+waitForServer('http://127.0.0.1:8231/check.html', 20000).then(() => {
   let pass = 0, fail = 0;
   CODES.forEach(code => {
     fs.writeFileSync(PROBE, buildPage(code));
@@ -101,4 +128,8 @@ setTimeout(() => {
   try { fs.unlinkSync(PROBE); } catch (e) {}
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
   process.exit(fail ? 1 : 0);
-}, 1800);
+}).catch(e => {
+  console.error('✗ ' + e.message);
+  try { server.kill(); } catch (err) {}
+  process.exit(1);
+});
