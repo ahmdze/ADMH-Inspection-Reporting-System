@@ -49,6 +49,7 @@ const GROUPS = [
   { file: 'sync_test.js',          browser: false, what: 'محرّك المزامنة بـFirebase وهمي' },
   { file: 'app_sync_test.js',      browser: false, what: 'ترابط الواجهة مع المزامنة' },
   { file: 'sync_conflict_test.js', browser: false, what: 'تعارض المزامنة ومنع فقدان التعديلات' },
+  { file: 'firestore_shape_test.js', browser: false, what: 'بنية بيانات Firestore: الرفع والتنزيل حقلاً بحقل' },
   { file: 'account_guard_test.js', browser: false, what: 'حماية البيانات المحلية عند تبديل الحساب' },
   { file: 'sw_test.js',            browser: false, what: 'استراتيجية تخزين عامل الخدمة' },
   { file: 'domain_test.js',        browser: false, what: 'ذكر النطاق الحقيقي في الرسائل' },

@@ -689,14 +689,14 @@ node _tools/auth_test.js            # 41 اختباراً: الدخول بحسا
 node _tools/popup_test.js           # 88 اختباراً: استرجاع الجلسة + Google Identity Services
 node _tools/sync_test.js            # 31 اختباراً لمحرّك المزامنة بـ Firebase وهمي
 node _tools/app_sync_test.js        # 28 اختباراً لترابط الواجهة مع المزامنة
-node _tools/sync_conflict_test.js   # 19 اختباراً لتعارض المزامنة ومنع فقدان التعديلات
+node _tools/sync_conflict_test.js   # 26 اختباراً لتعارض المزامنة ومنع فقدان التعديلات
 node _tools/account_guard_test.js   # 19 اختباراً لحماية البيانات المحلية عند تبديل الحساب
 node _tools/form_test.js            # 20 اختباراً للنموذج
 node _tools/lists_test.js           # 19 اختباراً للقوائم القابلة للتحرير
 node _tools/library_view_test.js    # 13 اختباراً لمكتبة العبارات
 node _tools/page_audit_test.js      # 13 اختباراً لسلامة المعرفات وسكربتات الصفحات
 node _tools/mobile_test.js          # 12 اختباراً لعرض الهاتف في متصفح حقيقي
-node _tools/registry_test.js        # 113 اختباراً لمنطق السجل والتوصيات والمؤشرات (بلا متصفح)
+node _tools/registry_test.js        # 132 اختباراً لمنطق السجل والتوصيات والمؤشرات (بلا متصفح)
 node _tools/history_test.js         #  59 اختباراً لمنطق سجل التعديلات (بلا متصفح)
 node _tools/followup_test.js        #  45 اختباراً للواجهات الثلاث في متصفح حقيقي
 node _tools/history_ui_test.js      #  33 اختباراً لسجل التعديلات في متصفح حقيقي
@@ -712,7 +712,7 @@ node _tools/visible_error_test.js   #  4 اختبارات لظهور أخطاء 
 node _tools/domain_test.js          #  1 اختبار لذكر النطاق الحقيقي في الرسائل
 ```
 
-**الإجمالي: ٨٢٨ فحصاً** في ٢٧ مجموعة — شُغّلت جولتان متتاليتان بصفر فشل.
+**الإجمالي: ٩٩٢ فحصاً** في ٣١ مجموعة — شُغّلت جولتان متتاليتان بصفر فشل.
 
 > **الأسرع:** `npm test` أو `node _tools/run_all.js` — يشغّلها كلها ويُخرج
 > رمز خروج 1 عند أي فشل، فيصلح للـCI مباشرةً. وما دون ذلك تفصيل المجموعات.

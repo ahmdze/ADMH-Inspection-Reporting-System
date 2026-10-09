@@ -60,13 +60,99 @@ section('=== ١) مفتاح المؤسسة: توحيد التهجئة ===');
 
 section('=== ٢) معرّف التوصية الثابت ===');
 {
-  check('same inputs → same id', R.recId('k', 1, 'نص') === R.recId('k', 1, 'نص'));
-  check('different text → different id', R.recId('k', 1, 'نص') !== R.recId('k', 1, 'نص آخر'));
-  check('different index → different id', R.recId('k', 1, 'نص') !== R.recId('k', 2, 'نص'));
-  check('different facility → different id', R.recId('a', 1, 'نص') !== R.recId('b', 1, 'نص'));
+  /* التوقيع: recId(facKey, text, visitDate) — بلا رقم ترتيب */
+  check('same inputs → same id', R.recId('k', 'نص') === R.recId('k', 'نص'));
+  check('different text → different id', R.recId('k', 'نص') !== R.recId('k', 'نص آخر'));
+  check('different facility → different id', R.recId('a', 'نص') !== R.recId('b', 'نص'));
+  check('different visit date → different id',
+    R.recId('k', 'نص', '2026-01-01') !== R.recId('k', 'نص', '2026-02-01'));
   check('whitespace differences ignored (tidy applied)',
-    R.recId('k', 1, ' نص ') === R.recId('k', 1, 'نص'));
-  check('id is a non-empty string', typeof R.recId('k', 1, 'نص') === 'string' && R.recId('k', 1, 'نص').length > 1);
+    R.recId('k', ' نص ') === R.recId('k', 'نص'));
+  check('id is a non-empty string',
+    typeof R.recId('k', 'نص') === 'string' && R.recId('k', 'نص').length > 1);
+
+  /* ---------------------------------------------------------------------
+     الجوهر: المعرّف لا يعتمد على **موضع** التوصية في القائمة.
+     كان يعتمد على رقم الترتيب، فإدراج توصية في البداية كان يُغيّر معرّفات
+     ما بعدها — فتضيع حالاتها ومواعيدها. هذا الفحص يمنع عودة العطل.
+     --------------------------------------------------------------------- */
+  const before = R.recId('k', 'التوصية الثانية');
+  /* نفس التوصية بعد أن صارت في موضع آخر — المعرّف يجب ألا يتغيّر */
+  const after = R.recId('k', 'التوصية الثانية');
+  check('the id does NOT depend on list position', before === after, { before: before, after: after });
+  check('recId takes no index argument', R.recId.length === 3, R.recId.length);
+}
+
+section('=== ٢ب) ثبات المعرّفات عند إعادة ترتيب التوصيات ===');
+{
+  const base = ['توصية أ', 'توصية ب', 'توصية ج'];
+  /* تقرير واحد ثابت، ونُغيّر ترتيب توصياته فقط */
+  const makeRep = items => mkReport('r1', 'مركز صحي الثبات', 'قطاع', '2026-01-10', 'زيارة',
+    [items]);
+
+  const first = R.buildRecs([makeRep(base)], R.blankRegistry());
+  const firstIds = Object.keys(first).sort();
+  check('three recommendations built', firstIds.length === 3, firstIds.length);
+
+  /* المستخدم يعدّل حالة التوصية الوسطى */
+  const midId = Object.keys(first).find(k => first[k].text === 'توصية ب');
+  check('the middle recommendation was found', !!midId, Object.keys(first));
+  R.updateRec(first, midId, { status: 'done', dueDate: '2026-05-01', evidence: 'كتاب ٧' });
+
+  /* الآن تُدرج توصية جديدة **في البداية** — وهذا ما كان يكسر المعرّفات */
+  const second = R.buildRecs([makeRep(['توصية جديدة في البداية'].concat(base))], first);
+
+  check('the new recommendation was added', Object.keys(second).length === 4,
+    Object.keys(second).length);
+  check('the middle recommendation KEEPS its id after reordering',
+    !!second[midId], Object.keys(second));
+  check('and keeps its status', second[midId] && second[midId].status === 'done',
+    second[midId] && second[midId].status);
+  check('and keeps its due date', second[midId] && second[midId].dueDate === '2026-05-01',
+    second[midId] && second[midId].dueDate);
+  check('and keeps its evidence', second[midId] && second[midId].evidence === 'كتاب ٧',
+    second[midId] && second[midId].evidence);
+  check('the other recommendations keep their ids too',
+    firstIds.every(id => !!second[id]), firstIds.filter(id => !second[id]));
+
+  /* ترتيب معكوس تماماً: المعرّفات تبقى */
+  const third = R.buildRecs([makeRep(base.slice().reverse())], second);
+  check('reversing the order keeps every id',
+    firstIds.every(id => !!third[id]), firstIds.filter(id => !third[id]));
+  check('and keeps the edited status',
+    third[midId] && third[midId].status === 'done',
+    third[midId] && third[midId].status);
+}
+
+section('=== ٢ج) ترحيل السجل القديم (معرّفات بترتيب) ===');
+{
+  /* نحاكي سجلاً قديماً بُني حين كان الترتيب جزءاً من الاشتقاق */
+  const rep = mkReport('r1', 'مركز صحي الترحيل', 'قطاع', '2026-03-05', 'زيارة',
+    [['توصية أولى', 'توصية ثانية']]);
+  const legacy = R.blankRegistry();
+  legacy.recs = {
+    ROLD1: {
+      id: 'ROLD1', facilityKey: R.facilityKey('مركز صحي الترحيل', 'قطاع'),
+      text: 'توصية ثانية', visitDate: '2026-03-05',
+      status: 'progress', dueDate: '2026-09-01', evidence: 'قديم', note: 'ملاحظة',
+      owner: 'جهة', verifiedAt: null, updatedAt: '2026-03-06T00:00:00Z', manual: false,
+    },
+  };
+  const migrated = R.buildRecs([rep], legacy);
+  const ids = Object.keys(migrated);
+  check('both recommendations exist after migration', ids.length === 2, ids.length);
+  const target = ids.find(k => migrated[k].text === 'توصية ثانية');
+  check('the legacy id was replaced by a stable one', target !== 'ROLD1', target);
+  check('the old STATUS survived migration', migrated[target].status === 'progress',
+    migrated[target].status);
+  check('the old DUE DATE survived migration', migrated[target].dueDate === '2026-09-01',
+    migrated[target].dueDate);
+  check('the old EVIDENCE survived migration', migrated[target].evidence === 'قديم',
+    migrated[target].evidence);
+  check('the old NOTE survived migration', migrated[target].note === 'ملاحظة',
+    migrated[target].note);
+  check('only one entry per recommendation (no duplicate)',
+    ids.length === 2, ids.length);
 }
 
 section('=== ٣) ملف المؤسسة: تجميع الزيارات ===');

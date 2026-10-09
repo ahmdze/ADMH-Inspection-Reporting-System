@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '22.0.0';
+const APP_VERSION = '23.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1562,6 +1562,30 @@ function bindButtons() {
   bindOn('#btnDownloadDb', () => openTransfer('download'));
   bindOn('#btnTransferGo', () => runTransfer());
 
+  /* النسخ الاحتياطية الكاملة */
+  bindOn('#btnBackupNow', () => {
+    if (takeFullBackup('نسخة يدوية')) {
+      toast('أُخذت نسخة كاملة', 'ok');
+      renderBackups();
+    } else {
+      toast('تعذّر أخذ النسخة — مساحة التخزين ممتلئة', 'err', 9000);
+    }
+  });
+  bindOn('#btnBackupExport', () => exportBackups());
+  bindOn('#btnBackupImport', () => $('#fileBackupImport').click());
+  const fbi = $('#fileBackupImport');
+  if (fbi) fbi.onchange = () => { importBackups(fbi.files[0]); fbi.value = ''; };
+  (function () {
+    const box = $('#backupList');
+    if (!box) return;
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-bkrestore]');
+      if (!b) return;
+      restoreFullBackup(+b.getAttribute('data-bkrestore'));
+      renderBackups();
+    });
+  })();
+
   /* المسودات */
   bindOn('#btnDrafts', () => openDrafts());
   bindOn('#btnDraftsRefresh', () => renderDrafts());
@@ -2449,6 +2473,7 @@ function showView(name) {
   if (name === 'dash') { rebuildRegistry(); renderDash(); }
   if (name === 'settings') {
     fillSettingsForm();
+    if (typeof renderBackups === 'function') renderBackups();
     /* تجهيز مسبق لمكتبة Google: حتى يبقى طلب الدخول داخل تفعيل النقرة،
        فلا يتحول إلى إعادة توجيه كاملة على الهاتف. */
     if (sync.available()) {
@@ -2693,6 +2718,16 @@ function initSync() {
          (وهو معرّف غير موجود، فكان يُرسل null دائماً فيضيع المحلي بصمت).
          ----------------------------------------------------------------- */
       settings: Object.assign({}, state.settings, { updatedAt: localStamp('settings') }),
+      libraryAt: localStamp('library'),
+      library: state.library,
+      /* -----------------------------------------------------------------
+         أوقات تعديل المحتوى — تُرسل مع الحمولة
+         -----------------------------------------------------------------
+         لا يكفي `updatedAt` للمستند: فهو وقت آخر كتابة، وكل دفع يُحدّثه.
+         فلو قارنّا به لظهر تعارض كاذب في كل مزامنة تالية. هذه الأوقات
+         تُحفظ **داخل المحتوى** فلا يمسّها الدفع.
+         ----------------------------------------------------------------- */
+      settingsAt: localStamp('settings'),
       libraryAt: localStamp('library'),
       library: state.library,
       listsAt: localStamp('lists'),
@@ -3770,10 +3805,215 @@ function handleRecDelete(e) {
 }
 
 /* =============================================================================
+   نسخة احتياطية كاملة قبل أي استبدال
+   =============================================================================
+   عطل حقيقي في الحماية: كنّا نأخذ `recordHistory()` قبل النقل، وهي تحفظ
+   **التقرير المفتوح وحده**. فلو نزّلت قاعدة السحابة وكان على الجهاز ٧٠ تقريراً
+   غير موجود في السحابة، لن يحمي السجل إلا التقرير المفتوح — وتضيع ٧٠ تقريراً
+   بلا رجعة. والواجهة نفسها تحذّر أن الاستبدال لا رجعة فيه.
+
+   الحل: نسخة كاملة قبل أي نقل، تشمل كل شيء. ولا يبدأ النقل إلا بعد نجاحها.
+   ============================================================================= */
+const LS_BACKUP = 'admh.backup.transfer.v1';
+const MAX_BACKUPS = 3;          /* نحتفظ بآخر ثلاث عمليات نقل */
+
+/**
+ * يأخذ نسخة كاملة من قاعدة هذا الجهاز.
+ * @param {string} reason سبب النسخة (يظهر في القائمة)
+ * @returns {boolean} نجاح موثَّق للنسخة
+ */
+function takeFullBackup(reason) {
+  const snapshot = {
+    at: new Date().toISOString(),
+    reason: reason || 'قبل النقل',
+    app: APP_VERSION,
+    counts: {},
+    payload: {
+      reports: state.reports,
+      draft: jread(LS_DRAFT, null),
+      settings: state.settings,
+      library: state.library,
+      lists: (typeof window !== 'undefined' && window.ADMHLists) ? window.ADMHLists.exportAll() : null,
+      registry: readRegistry(),
+      history: readHistory(),
+    },
+  };
+  const H = HIST();
+  snapshot.counts = {
+    reports: (snapshot.payload.reports || []).length,
+    recommendations: Object.keys((snapshot.payload.registry || {}).recs || {}).length,
+    facilities: Object.keys((snapshot.payload.registry || {}).facilities || {}).length,
+    hasDraft: !!snapshot.payload.draft,
+    lists: snapshot.payload.lists ? Object.keys(snapshot.payload.lists).length : 0,
+    historySnapshots: H ? H.count(readHistory()) : 0,
+  };
+
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(LS_BACKUP) || '[]'); } catch (e) { list = []; }
+  if (!Array.isArray(list)) list = [];
+  list.unshift(snapshot);
+  list = list.slice(0, MAX_BACKUPS);
+
+  if (!jwriteSilent(LS_BACKUP, list)) return false;
+
+  /* نتحقق فعلاً أن النسخة قابلة للقراءة — لا نكتفي بنجاح الكتابة */
+  try {
+    const back = JSON.parse(localStorage.getItem(LS_BACKUP) || '[]');
+    return Array.isArray(back) && back.length > 0 &&
+      back[0].payload && Array.isArray(back[0].payload.reports);
+  } catch (e) { return false; }
+}
+
+/** قائمة النسخ الكاملة */
+function listBackups() {
+  try {
+    const l = JSON.parse(localStorage.getItem(LS_BACKUP) || '[]');
+    return Array.isArray(l) ? l : [];
+  } catch (e) { return []; }
+}
+
+/**
+ * يستعيد نسخة كاملة — استبدال كامل أيضاً، فيأخذ نسخة قبلها.
+ * @param {number} index موضع النسخة في القائمة
+ */
+function restoreFullBackup(index) {
+  const list = listBackups();
+  const bk = list[index];
+  if (!bk || !bk.payload) { toast('لم تُوجد النسخة', 'warn'); return false; }
+
+  if (!confirm('استعادة النسخة الكاملة بتاريخ ' +
+      new Date(bk.at).toLocaleString('ar-IQ') + '؟\n\n' +
+      'ستُستبدل كل بيانات هذا الجهاز: ' + bk.counts.reports + ' تقريراً. ' +
+      'وسنأخذ نسخة من وضعك الحالي أولاً.')) return false;
+
+  takeFullBackup('قبل استعادة نسخة');
+
+  const p = bk.payload || {};
+  let failed = null;
+  try {
+    state.reports = Array.isArray(p.reports) ? p.reports : [];
+    if (!jwriteSilent(LS_REPORTS, state.reports)) failed = 'الأرشيف';
+    if (p.draft && !jwriteSilent(LS_DRAFT, p.draft)) failed = failed || 'المسودة';
+    if (p.settings) {
+      state.settings = Object.assign(blankSettings(), p.settings);
+      state.logo = state.settings.logo || '';
+      if (!jwriteSilent(LS_SETTINGS, state.settings)) failed = failed || 'الإعدادات';
+    }
+    if (p.library) {
+      state.library = p.library;
+      if (!jwriteSilent(LS_LIBRARY, state.library)) failed = failed || 'المكتبة';
+    }
+    if (p.lists && window.ADMHLists) {
+      window.ADMHLists.importAll(p.lists);
+      saveListsCache();
+    }
+    if (p.registry && REG()) {
+      registryCache = REG().normalizeRegistry(p.registry);
+      jwriteSilent(LS_REGISTRY, registryCache);
+    }
+    if (p.history && HIST()) {
+      historyCache = HIST().normalize(p.history);
+      jwriteSilent(LS_HISTORY, historyCache);
+    }
+  } catch (e) {
+    failed = failed || (e && e.message);
+  }
+
+  if (failed) {
+    toast('تعذّرت الاستعادة الكاملة — أخفق: ' + failed, 'err', 12000);
+    return false;
+  }
+
+  rebuildRegistry();
+  renderAll();
+  refreshArchiveMeta();
+  renderArchive();
+  fillDatalists();
+  renderHistoryView();
+  toast('استُعيدت النسخة الكاملة: ' + bk.counts.reports + ' تقريراً', 'ok', 7000);
+  return true;
+}
+
+/** يصدّر كل النسخ الكاملة ملفاً واحداً */
+function exportBackups() {
+  const list = listBackups();
+  if (!list.length) { toast('لا نسخ كاملة محفوظة', 'warn'); return; }
+  download(
+    new Blob([JSON.stringify({ backups: list, at: new Date().toISOString() }, null, 2)],
+      { type: 'application/json' }),
+    'نسخ-احتياطية-' + todayISO() + '.json'
+  );
+  toast('نُزّلت ' + list.length + ' نسخة', 'ok');
+}
+
+/** يستورد نسخاً من ملف (يُضيفها إلى القائمة) */
+function importBackups(file) {
+  if (!file) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    let data;
+    try { data = JSON.parse(rd.result); }
+    catch (e) { toast('الملف ليس JSON صالحاً', 'err'); return; }
+    const incoming = Array.isArray(data) ? data : (data && data.backups);
+    if (!Array.isArray(incoming) || !incoming.length) {
+      toast('لا نسخ في الملف', 'warn'); return;
+    }
+    const valid = incoming.filter(b => b && b.payload && Array.isArray(b.payload.reports));
+    if (!valid.length) { toast('لا نسخ صالحة في الملف', 'err'); return; }
+
+    const list = listBackups().concat(valid).slice(0, MAX_BACKUPS * 2);
+    if (jwriteSilent(LS_BACKUP, list)) {
+      toast('استُوردت ' + valid.length + ' نسخة', 'ok');
+      renderBackups();
+    } else {
+      toast('تعذّر الحفظ — مساحة التخزين ممتلئة', 'err');
+    }
+  };
+  rd.readAsText(file);
+}
+
+/** يرسم قائمة النسخ الكاملة */
+function renderBackups() {
+  const box = $('#backupList');
+  if (!box) return;
+  const list = listBackups();
+
+  if (!list.length) {
+    box.innerHTML = '<p class="empty">لا نسخ كاملة بعد. تُؤخذ تلقائياً قبل كل رفع أو تنزيل.</p>';
+    return;
+  }
+
+  box.innerHTML = list.map((b, i) => {
+    const c = b.counts || {};
+    const bits = [c.reports + ' تقريراً'];
+    if (c.recommendations) bits.push(c.recommendations + ' توصية');
+    if (c.facilities) bits.push(c.facilities + ' مؤسسة');
+    if (c.hasDraft) bits.push('مسودة');
+    if (c.historySnapshots) bits.push(c.historySnapshots + ' لقطة');
+    const d = new Date(b.at);
+    const when = isNaN(d.getTime()) ? '' :
+      fmtDate(b.at.slice(0, 10)) + ' — ' +
+      String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+
+    return `
+      <div class="hist" data-bk="${i}">
+        <div class="top">
+          <span class="when">${esc(when)}</span>
+          <span class="badge histb">${esc(b.reason || '')}</span>
+          <span class="grow"></span>
+          <button class="btn warn sm" data-bkrestore="${i}" type="button">↩ استعادة كاملة</button>
+        </div>
+        <div class="chg">${bits.map(x => '<span class="pill">' + esc(x) + '</span>').join(' ')}</div>
+      </div>`;
+  }).join('');
+}
+
+/* =============================================================================
    نقل قاعدة البيانات — رفع أو تنزيل، بتأكيد صريح
    =============================================================================
    لا مزامنة تلقائية دمجية. المستخدم يقرّر متى يرفع ومتى ينزّل، ومن أي جهاز.
-   وكل عملية **استبدال كامل**، لذا نطلب تأكيداً مكتوباً قبل التنفيذ.
+   وكل عملية **استبدال كامل**، لذا نطلب تأكيداً مكتوباً قبل التنفيذ،
+   **ونأخذ نسخة كاملة** — ولا نبدأ إن أخفقت النسخة.
    ============================================================================= */
 let pendingTransfer = null;      /* 'upload' | 'download' */
 
@@ -3843,21 +4083,36 @@ function runTransfer() {
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '⏳ جارٍ…'; }
 
-  /* لقطة في السجل قبل أي استبدال — فلا يضيع العمل الحالي */
+  /* ---------------------------------------------------------------------
+     نسخة كاملة **إلزامية** قبل الاستبدال.
+     ---------------------------------------------------------------------
+     لا نبدأ النقل إن أخفقت النسخة: الاستبدال لا رجعة فيه، والنسخة هي
+     شبكة الأمان الوحيدة لبقية الأرشيف (لا للتقرير المفتوح وحده).
+     --------------------------------------------------------------------- */
+  const backed = takeFullBackup(kind === 'upload' ? 'قبل الرفع' : 'قبل التنزيل');
+  if (!backed) {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    toast('⚠️ تعذّر أخذ نسخة احتياطية كاملة — لم يبدأ النقل. ' +
+          'فرّغ مساحة تخزين ثم أعد المحاولة.', 'err', 14000);
+    return;
+  }
+  /* لقطة في السجل أيضاً — لاستعادة التقرير المفتوح وحده */
   recordHistory(kind === 'upload' ? 'قبل الرفع' : 'قبل التنزيل', true);
 
   const work = (kind === 'upload') ? S.uploadDatabase() : S.downloadDatabase();
 
   work.then(r => {
     if (kind === 'upload') {
-      toast('⬆️ رُفعت قاعدة البيانات: ' + r.reports + ' تقريراً', 'ok', 6000);
+      let msg = '⬆️ رُفعت قاعدة البيانات: ' + r.reports + ' تقريراً';
+      if (r.removed) msg += ' · حُذف ' + r.removed + ' تقريراً كان في السحابة فقط';
+      toast(msg, 'ok', 8000);
     } else {
       const parts = [r.reports + ' تقريراً'];
       if (r.hasSettings) parts.push('الإعدادات');
       if (r.hasLibrary) parts.push('المكتبة');
       if (r.hasLists) parts.push('القوائم');
       if (r.hasRegistry) parts.push('سجل التوصيات');
-      toast('⬇️ نُزّلت قاعدة البيانات: ' + parts.join(' · '), 'ok', 6000);
+      toast('⬇️ نُزّلت قاعدة البيانات: ' + parts.join(' · '), 'ok', 7000);
     }
     rebuildRegistry();
     renderAll();
@@ -3866,7 +4121,8 @@ function runTransfer() {
     renderSyncUI(S.status());
     renderHistoryView();
   }).catch(e => {
-    toast('فشل النقل: ' + (e && e.message ? e.message : ''), 'err', 9000);
+    toast('فشل النقل: ' + (e && e.message ? e.message : '') +
+      ' — يمكنك استعادة النسخة الكاملة من «الإعدادات»', 'err', 14000);
     renderSyncUI(S.status());
   }).then(() => {
     if (btn) { btn.disabled = false; btn.textContent = label; }

@@ -846,10 +846,39 @@
     }), Promise.resolve()).then(() => ({ pushed }));
   }
 
+  /**
+   * يدفع الإعدادات والمكتبة والقوائم والسجل — مع **أوقات تعديل المحتوى**.
+   * =============================================================================
+   * عطل خطير كان يحدث هنا (وهو ما حذّر منه المراجع):
+   *
+   * كان الدمج يقارن أوقات كل مجموعة بـ`updatedAt` **للمستند السحابي**، وهذا
+   * وقت آخر *كتابة* لا وقت آخر *تعديل للمحتوى*. وبما أن كل عملية دفع تُحدّث
+   * المستند، فإن الجهاز الذي يدفع يجعل `remoteAt` أحدث من `lastSynced` —
+   * فيرى نفسه في المزامنة التالية «الطرف الآخر تغيّر أيضاً» ويُعلن **تعارضاً
+   * كاذباً** بلا أي تغيير حقيقي من الطرف الآخر.
+   *
+   * والحل: نحفظ وقت تعديل كل مجموعة **داخل المحتوى نفسه** فلا يمسّه الدفع:
+   *   payload.settingsAt · libraryAt · listsAt · registryAt
+   *
+   * فصار المعنى صريحاً:
+   *   `updatedAt`  = متى كُتب المستند   (لا يُقارَن به)
+   *   `*At`        = متى تغيّر المحتوى  (هو أساس المقارنة)
+   * =============================================================================
+   */
   function pushSettings(payload) {
     if (!payload) return Promise.resolve();
+    const stamp = new Date().toISOString();
+    const p = payload.payload || {};
+    /* نُثبّت وقت المحتوى لكل مجموعة: القادم من المستدعي، أو الآن إن غاب */
+    const contentStamps = {
+      settingsAt: p.settingsAt || (p.settings ? stamp : null),
+      libraryAt: p.libraryAt || (p.library ? stamp : null),
+      listsAt: p.listsAt || (p.lists ? stamp : null),
+      registryAt: p.registryAt || (p.registry ? stamp : null),
+    };
     return settingsDoc().set(Object.assign({}, payload, {
-      updatedAt: new Date().toISOString(),
+      payload: Object.assign({}, p, contentStamps),
+      updatedAt: stamp,
       device: state.device,
     }), { merge: true });
   }
@@ -893,14 +922,42 @@
      وهذا يجعل الأمر منظّماً: تعرف متى رفعت، ومن أي جهاز، ومتى نزّلت.
      ========================================================================= */
 
+  /**
+   * يفكّ مستنداً سحابياً إلى تقرير.
+   * -----------------------------------------------------------------------------
+   * بنية المستند التي تكتبها `pushReports`:
+   *   { id, title, facilityName, ..., deleted, data: { التقرير الكامل } }
+   *
+   * أي أن **التقرير نفسه داخل `data`**، والحقول العلوية للفهرسة فقط.
+   *
+   * وهذا كان موضع عطل خطير: `pullDatabase` كانت تفحص `_deleted` (حقل لا
+   * وجود له — الصحيح `deleted`)، وتُضيف **المستند كله** كأنه التقرير. فتُحفظ
+   * السجلات بالشكل الخارجي، ويصل `recGroups` و`records` فارغين — أي **ضياع
+   * محتوى التقرير** عند التنزيل. كما أن الشواهد كانت تمرّ مع التقارير.
+   *
+   * @returns {object|null} التقرير، أو null إن كان شاهد قبر
+   */
+  function reportFromDoc(docId, v) {
+    if (!v) return null;
+    if (v.deleted || !v.data) return null;          /* شاهد قبر أو مستند فارغ */
+    const rec = Object.assign({}, v.data, {
+      id: docId,
+      updatedAt: v.updatedAt || v.data.updatedAt,
+    });
+    /* لا نُسرّب حقول الفهرسة إلى التقرير */
+    delete rec.deleted;
+    delete rec.device;
+    return rec;
+  }
+
   /** يجمع كل ما في السحابة في كائن واحد */
   function pullDatabase() {
     return reportsCol().get().then(snap => {
       const reports = [];
       if (snap && snap.forEach) {
         snap.forEach(d => {
-          const v = d.data() || {};
-          if (!v._deleted) reports.push(Object.assign({ id: d.id }, v));
+          const rec = reportFromDoc(d.id, d.data() || {});
+          if (rec) reports.push(rec);           /* الشواهد تُستبعد */
         });
       }
       return pullSettings().then(settingsDocData =>
@@ -926,8 +983,23 @@
   }
 
   /**
-   * يرفع قاعدة هذا الجهاز إلى السحابة (استبدال كامل).
-   * @returns {Promise<{reports:number, at:string}>}
+   * يرفع قاعدة هذا الجهاز إلى السحابة — **استبدال كامل حقيقي**.
+   * =============================================================================
+   * العطل الذي كان يحدث: كانت الدالة تكتفي بـ`pushReports(المحلي)`، وهي تكتب
+   * المستندات الموجودة محلياً فقط. فلو كان في السحابة ١٠٠ تقرير وعلى الجهاز
+   * ٧٠، لبقي ٣٠ تقريراً قديماً في السحابة — وهذا **دمج لا استبدال**، خلافاً
+   * لما تُعلنه الواجهة.
+   *
+   * الاستبدال الحقيقي الآن:
+   *   ١) نقرأ معرّفات ما في السحابة
+   *   ٢) نرفع كل المحلي
+   *   ٣) نُعلّم كل ما في السحابة وليس محلياً بـ«شاهد قبر» (deleted: true)
+   *
+   * ولماذا شاهد قبر لا حذفاً نهائياً؟ لأن الشواهد هي آلية المزامنة نفسها:
+   * بها ينتشر الحذف إلى بقية الأجهزة. والحذف النهائي يُبقي التقارير على
+   * الأجهزة الأخرى بلا أي إشارة إلى أنها حُذفت.
+   * =============================================================================
+   * @returns {Promise<{reports:number, removed:number, at:string}>}
    */
   function uploadDatabase() {
     ensureInit();
@@ -936,34 +1008,87 @@
     const local = (hooks.load && hooks.load()) || {};
     const stamp = new Date().toISOString();
     const reports = Array.isArray(local.reports) ? local.reports : [];
+    const localIds = {};
+    reports.forEach(r => { if (r && r.id) localIds[r.id] = true; });
+
     setState({ busy: true, error: '' });
 
-    return pushReports(reports)
-      .then(() => pushSettings({
-        payload: {
-          settings: local.settings || null,
-          library: local.library || null,
-          lists: local.lists || null,
-          registry: local.registry || null,
-        },
-      }))
-      .then(() => {
-        if (local.draft) {
-          return draftDoc().set({
-            draft: local.draft, updatedAt: stamp, device: state.device,
-          }, { merge: true });
+    /* ١) ما في السحابة الآن؟ */
+    return reportsCol().get()
+      .then(snap => {
+        const extras = [];
+        if (snap && snap.forEach) {
+          snap.forEach(d => {
+            const v = d.data() || {};
+            /* نتجاهل الشواهد الموجودة: لا داعي لتكرارها */
+            if (localIds[d.id]) return;
+            if (v.deleted) return;
+            extras.push(d.id);
+          });
         }
+
+        /* ٢) نرفع المحلي */
+        return pushReports(reports).then(() => extras);
       })
-      .then(() => {
+      .then(extras => {
+        /* ٣) نطمس الزائد في السحابة */
+        return tombstoneReports(extras).then(() => extras.length);
+      })
+      .then(removed => {
+        /* الإعدادات والمكتبة والقوائم والسجل — تُستبدل كما هي، حتى لو كانت null */
+        return pushSettings({
+          payload: {
+            settings: local.settings || null,
+            library: local.library || null,
+            lists: local.lists || null,
+            registry: local.registry || null,
+          },
+        }).then(() => removed);
+      })
+      .then(removed => {
+        /* المسودة: نستبدلها دائماً. وإن لم يكن هناك مسودة محلية، نمحو السحابية
+           — وإلا بقيت مسودة جهاز آخر تظهر لاحقاً على هذا الجهاز. */
+        const d = local.draft || null;
+        return draftDoc().set({
+          draft: d,
+          updatedAt: stamp,
+          device: state.device,
+        }, { merge: false }).then(() => removed);
+      })
+      .then(removed => {
         setState({ busy: false, lastSync: stamp, error: '' });
         stampLast(stamp);
-        return { reports: reports.length, at: stamp };
+        return { reports: reports.length, removed: removed, at: stamp };
       })
       .catch(err => {
         const msg = friendlyError(err);
         setState({ busy: false, error: msg });
         throw taggedError(err, msg);
       });
+  }
+
+  /**
+   * يُعلّم تقارير بـ«شاهد قبر» فتنتشر عملية الحذف إلى بقية الأجهزة.
+   * يتعامل مع حدود دفعات Firestore (٥٠٠ عملية).
+   * @param {string[]} ids
+   */
+  function tombstoneReports(ids) {
+    if (!ids || !ids.length) return Promise.resolve(0);
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += 400) chunks.push(ids.slice(i, i + 400));
+    const stamp = new Date().toISOString();
+    return chunks.reduce((chain, chunk) => chain.then(() => {
+      const batch = fb.db.batch();
+      chunk.forEach(id => {
+        batch.set(reportsCol().doc(id), {
+          deleted: true,
+          data: null,
+          updatedAt: stamp,
+          device: state.device,
+        }, { merge: false });
+      });
+      return batch.commit();
+    }), Promise.resolve()).then(() => ids.length);
   }
 
   /**
@@ -1068,8 +1193,28 @@
         const out = { reports: mergedReports };
         let settingsChanged = false;
         const remotePayload = (remoteSettings && remoteSettings.payload) ? remoteSettings.payload : null;
-        const localAt = Date.parse((local.settings && local.settings.updatedAt) || 0) || 0;
-        const remoteAt = Date.parse(remoteSettings && remoteSettings.updatedAt || 0) || 0;
+        const localAt = Date.parse((local.settings && local.settings.updatedAt)
+          || local.settingsAt || 0) || 0;
+
+        /* =================================================================
+           أوقات تعديل **المحتوى** لكل مجموعة — لا وقت كتابة المستند
+           =================================================================
+           `remoteSettings.updatedAt` هو وقت آخر كتابة للمستند، وكل دفع
+           يُحدّثه. فلو قارنّا به لرأى الجهاز نفسه «الطرف الآخر تغيّر» في كل
+           مزامنة تالية، وأعلن تعارضاً كاذباً.
+
+           لذلك نقرأ وقت المحتوى من داخل payload (`libraryAt` … إلخ)، وهو
+           لا يمسّه الدفع. ومع مستند قديم لا يحمل هذه الأوقات، نرجع إلى
+           `updatedAt` للتوافق ثم يُصحَّح بعد أول دفع.
+           ================================================================= */
+        const docAt = Date.parse((remoteSettings && remoteSettings.updatedAt) || 0) || 0;
+        const groupAt = (name, localFallback) => {
+          if (!remotePayload) return docAt;
+          const v = remotePayload[name + 'At'];
+          if (v) return Date.parse(v) || 0;
+          /* توافق مع مستند قديم: لا نعرف وقت المحتوى، فنستخدم وقت الكتابة */
+          return docAt;
+        };
 
         /* =================================================================
            دمج كل مجموعة بيانات على حدة — لا مقارنة زمنية واحدة
@@ -1111,16 +1256,16 @@
 
         const mergedSettings = mergeGroup(
           'settings', local.settings, (remotePayload && remotePayload.settings) || null,
-          localAt, remoteAt);
+          localAt, groupAt('settings'));
         const mergedLibrary = mergeGroup(
           'library', local.library, (remotePayload && remotePayload.library) || null,
-          Date.parse(local.libraryAt || 0) || 0, remoteAt);
+          Date.parse(local.libraryAt || 0) || 0, groupAt('library'));
         const mergedLists = mergeGroup(
           'lists', local.lists, (remotePayload && remotePayload.lists) || null,
-          Date.parse(local.listsAt || 0) || 0, remoteAt);
+          Date.parse(local.listsAt || 0) || 0, groupAt('lists'));
         const mergedRegistry = mergeGroup(
           'registry', local.registry, (remotePayload && remotePayload.registry) || null,
-          Date.parse(local.registryAt || 0) || 0, remoteAt);
+          Date.parse(local.registryAt || 0) || 0, groupAt('registry'));
 
         /* -----------------------------------------------------------------
            المسودة: لها مستند خاص، وتُدمج بمنطق «الأحدث يفوز» مع تحفّظ.
@@ -1345,6 +1490,8 @@
     uploadDatabase,
     downloadDatabase,
     pullDatabase,
+    reportFromDoc,
+    tombstoneReports,
     pushPullRequest,
     parseConfigInput,
     normalizeConfig,

@@ -111,6 +111,8 @@ const os = require('os');
 const { spawnSync } = require('child_process');
 
 let profileDir = null;
+/* عدّاد داخل العملية: يضمن تفرد الاسم حتى داخل الملّي ثانية نفسها */
+let profileSeq = 0;
 
 /** يُنشئ مجلد ملف تعريف مؤقّتاً (مرة واحدة لكل عملية) */
 function profilePath() {
@@ -134,7 +136,19 @@ function profilePath() {
     try { return os.tmpdir(); } catch (e) { return ROOT; }
   })();
 
-  const unique = 'admh-chrome-' + process.pid + '-' + Date.now().toString(36);
+  /* ---------------------------------------------------------------------
+     اسم فريد مضمون.
+     ---------------------------------------------------------------------
+     كان `pid + Date.now()` فقط، وهو **يتكرّر** إذا أُنشئ مجلدان في العملية
+     نفسها خلال الملّي ثانية ذاتها (كما في اختبار يستدعي التنظيف ثم الإنشاء).
+     ظهر ذلك فعلاً كإخفاق في CI:
+         ✗ a fresh call after cleanup yields a new folder
+     نُضيف عدّاداً داخل العملية وعنصراً عشوائياً، فيصير التكرار مستحيلاً.
+     --------------------------------------------------------------------- */
+  profileSeq += 1;
+  const rand = Math.random().toString(36).slice(2, 8);
+  const unique = 'admh-chrome-' + process.pid + '-' + Date.now().toString(36) +
+    '-' + profileSeq + '-' + rand;
   const dir = path.join(parent, unique);
 
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* سنعمل بلا ملف تعريف */ }

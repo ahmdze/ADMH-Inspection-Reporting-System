@@ -128,6 +128,17 @@ function makeDevice(label, cloud, opts) {
       if (payload.library) local.library = payload.library;
       if (payload.lists) local.lists = payload.lists;
       if (payload.registry) local.registry = payload.registry;
+      /* ---------------------------------------------------------------------
+         أوقات آخر مزامنة **إلزامية**.
+         ---------------------------------------------------------------------
+         كان المحاكي يُهملها، فبقي `synced` فارغاً و`lastAt = 0` دائماً —
+         أي أن كل تغيير بدا «جديداً من الطرفين» فظهر تعارض كاذب في كل
+         مزامنة. وهذا بالضبط العطل الذي نبحث عنه، وكان المحاكي يخفيه.
+         --------------------------------------------------------------------- */
+      if (payload.synced && typeof payload.synced === 'object') {
+        local.synced = Object.assign({}, local.synced || {}, payload.synced);
+      }
+      if (payload.draftFromCloud && payload.draft) local.draft = payload.draft;
     },
   });
   /** يتصل ثم يُزامن — المزامنة تتطلب جلسة دخول */
@@ -236,6 +247,54 @@ function makeDevice(label, cloud, opts) {
     const r4 = await empty.syncNow();
     check('المزامنة تنجح بلا بيانات', !!r4, r4);
     check('وبلا تعارض', !(r4 && r4.conflictNotice));
+  }
+
+  console.log('\n=== مزامنة ← تعديل محلي فقط ← مزامنة (لا تعارض كاذب) ===');
+  {
+    /* ---------------------------------------------------------------------
+       السيناريو الذي أوصى به المراجع:
+         مزامنة ناجحة، ثم تعديل محلي فقط، ثم مزامنة جديدة.
+       المطلوب: يُرفع المحلي **بلا** تحذير تعارض كاذب.
+
+       وهذا يفحص تحديداً أن وقت المزامنة السابقة يُسجَّل صحيحاً، وأن تحديث
+       المستند السحابي (الذي يحدث مع كل دفع) لا يُحسب «تعديلاً من الطرف الآخر».
+       --------------------------------------------------------------------- */
+    const cloud = makeCloud();
+    const dev = makeDevice('Solo', cloud, {
+      library: { records: ['أصل'] },
+      libraryAt: new Date(Date.now() - 600000).toISOString(),
+    });
+
+    /* ١) مزامنة أولى: تُثبّت نقطة مرجعية */
+    const r1 = await dev.syncNow();
+    check('the first sync succeeds', !!r1, r1);
+    check('the first sync reports no conflict', !(r1 && r1.conflictNotice));
+
+    /* ٢) تعديل محلي فقط — بلا أي تغيير من الطرف الآخر */
+    dev.local.library = { records: ['أصل', 'أُضيف محلياً'] };
+    dev.local.libraryAt = new Date().toISOString();
+
+    /* ٣) مزامنة ثانية */
+    const r2 = await dev.syncNow();
+    check('the second sync reports NO false conflict', !(r2 && r2.conflictNotice),
+      { notice: r2 && r2.conflictNotice,
+        localAt: dev.local.libraryAt,
+        syncedAt: dev.local.synced && dev.local.synced.library,
+        cloudAt: cloud.meta.settings && cloud.meta.settings.updatedAt });
+    check('the local edit reached the cloud',
+      !!(cloud.meta.settings && cloud.meta.settings.payload &&
+         cloud.meta.settings.payload.library &&
+         cloud.meta.settings.payload.library.records.indexOf('أُضيف محلياً') >= 0),
+      cloud.meta.settings && cloud.meta.settings.payload &&
+      cloud.meta.settings.payload.library);
+    check('and the local copy is intact',
+      dev.local.library.records.indexOf('أُضيف محلياً') >= 0, dev.local.library.records);
+
+    /* ٤) مزامنة ثالثة بلا أي تغيير: لا تعارض ولا تغيير */
+    const r3 = await dev.syncNow();
+    check('a third sync with no changes is quiet', !(r3 && r3.conflictNotice));
+    check('and the cloud copy is still correct',
+      !!(cloud.meta.settings.payload.library.records.indexOf('أُضيف محلياً') >= 0));
   }
 
   console.log('\n=== كل مجموعة تُقيَّم على حدة ===');

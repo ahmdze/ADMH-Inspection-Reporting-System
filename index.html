@@ -1051,6 +1051,27 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             <div class="btnrow" style="margin-top:10px">
               <button class="btn danger" id="btnSyncSignOut">🚪 إيقاف المزامنة على هذا الجهاز</button>
             </div>
+
+            <!-- ============================================================
+                 النسخ الكاملة — شبكة الأمان قبل أي استبدال
+                 ============================================================ -->
+            <details id="backupBox" style="margin-top:14px">
+              <summary style="cursor:pointer;font-weight:600;color:var(--primary-2)">
+                🛟 النسخ الاحتياطية الكاملة
+              </summary>
+              <p class="hint" style="margin:10px 0 6px">
+                تُؤخذ <b>تلقائياً</b> قبل كل رفع أو تنزيل لقاعدة البيانات، وتشمل
+                الأرشيف والمسودة والإعدادات والمكتبة والقوائم وسجل التوصيات وسجل التعديلات.
+                ولا يبدأ النقل إن أخفقت.
+              </p>
+              <div id="backupList"></div>
+              <div class="btnrow" style="margin-top:8px">
+                <button class="btn ghost sm" id="btnBackupNow" type="button">📌 خذ نسخة الآن</button>
+                <button class="btn ghost sm" id="btnBackupExport" type="button">⬇️ تصدير النسخ</button>
+                <button class="btn ghost sm" id="btnBackupImport" type="button">⬆️ استيراد نسخ</button>
+                <input type="file" id="fileBackupImport" accept=".json,application/json" class="hidden">
+              </div>
+            </details>
           </div>
 
           <!-- ============================================================

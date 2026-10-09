@@ -73,10 +73,23 @@ window.ADMHReport = window.ADMHReport || {};
   }
 
   /** معرّف فريد قصير للتوصية */
-  function recId(facKey, idx, text) {
-    /* معرّف ثابت مشتق من المؤسسة والنص — فلا يتغيّر بين المزامنات
-       إلا إذا تغيّر النص فعلاً */
-    const h = hash32((facKey || '') + '#' + String(idx) + '#' + tidy(text));
+  /**
+   * معرّف التوصية — **لا يعتمد على موضعها في القائمة**.
+   * -----------------------------------------------------------------------------
+   * عطل حقيقي كان يحدث: كان المعرّف يُشتق من (المؤسسة + **رقم الترتيب** + النص).
+   * فأي إدراج في بداية القائمة يُغيّر أرقام ما بعدها، وبالتالي تتغيّر معرّفات
+   * التوصيات السابقة — فيفقد النظام ارتباطها بحالتها وموعدها ودليلها.
+   *
+   * والقيمة الحقيقية لنظام متابعة التوصيات تقوم على بقاء هذا الارتباط ثابتاً
+   * بمرور الوقت. لذلك أُزيل الترتيب من الاشتقاق.
+   *
+   * @param {string} facKey مفتاح المؤسسة
+   * @param {string} text نص التوصية
+   * @param {string} [visitDate] تاريخ الزيارة — يميّز توصية متطابقة في زيارتين
+   */
+  function recId(facKey, text, visitDate) {
+    const day = visitDate ? String(visitDate).slice(0, 10) : '';
+    const h = hash32((facKey || '') + '#' + tidy(text) + '#' + day);
     return 'R' + h;
   }
 
@@ -208,22 +221,22 @@ window.ADMHReport = window.ADMHReport || {};
   function recsFromReport(r) {
     if (!r) return [];
     const facKey = facilityKey(r.facilityName, r.sector);
+    const visitDate = r.visitDate || r.createdAt || null;
     const out = [];
-    let idx = 0;
     (r.recGroups || []).forEach(g => {
       const label = tidy(g.label);
       (g.items || []).forEach(it => {
         const text = tidy(it);
         if (!text) return;
-        idx += 1;
         out.push({
-          id: recId(facKey, idx, text),
+          /* لا رقم ترتيب في الاشتقاق — انظر recId */
+          id: recId(facKey, text, visitDate),
           facilityKey: facKey,
           text: text,
           label: label,
           groupLetter: tidy(g.letter),
           sourceReportId: tidy(r.id),
-          visitDate: r.visitDate || r.createdAt || null,
+          visitDate: visitDate,
           dueDate: null,
           owner: label,
           status: 'pending',
@@ -239,23 +252,58 @@ window.ADMHReport = window.ADMHReport || {};
   }
 
   /**
+   * فهرس بديل للبحث عن توصية سابقة.
+   * -----------------------------------------------------------------------------
+   * لماذا؟ لأن معرّف التوصية تغيّر (أُزيل رقم الترتيب من الاشتقاق). فالتوصيات
+   * المحفوظة بمعرّفات قديمة لن تُطابَق بالمعرّف الجديد، ولو اكتفينا بالمعرّف
+   * لضاعت حالات المستخدم ومواعيده وأدلته — وهذا بالضبط ما نُصلحه.
+   *
+   * فنبحث بمفتاح (المؤسسة + النص المُطبَّع + التاريخ). وهذا يطابق دوماً،
+   * فيُهاجَر السجل القديم مرة واحدة ثم يعمل بالمعرّف الجديد الثابت.
+   */
+  function legacyKey(facKey, text, visitDate) {
+    const day = visitDate ? String(visitDate).slice(0, 10) : '';
+    return tidy(facKey) + '\u0000' + tidy(text) + '\u0000' + day;
+  }
+
+  /**
    * يدمج توصيات كل التقارير في سجل واحد، **محفوظاً فيه حالات المستخدم**.
    * القاعدة: النص القادم من التقرير يحدّث الوصف، وحالة المستخدم لا تُمحى.
    * @param {Array} reports
    * @param {object} existing السجل السابق (لتُحفظ الحالات والتعديلات)
    */
   function buildRecs(reports, existing) {
-    const prev = (existing && existing.recs) ? existing.recs : {};
+    /* ---------------------------------------------------------------------
+       نقبل الشكلين: السجل الكامل (فيه recs) أو كائن التوصيات وحده.
+       كان يقبل `existing.recs` فقط، فمن مرّر كائن التوصيات (كما تفعل
+       الاختبارات وبعض المستدعين) يجد `prev` فارغاً فتُفقد حالات المستخدم —
+       بلا أي خطأ ظاهر. هذا بالضبط ما حدث ويجب ألا يتكرّر.
+       --------------------------------------------------------------------- */
+    const prev = (existing && typeof existing === 'object')
+      ? (existing.recs && typeof existing.recs === 'object' ? existing.recs : existing)
+      : {};
     const out = {};
     const seen = {};
+
+    /* فهرس التوصيات السابقة بمفتاح بديل — للترحيل من معرّفات أقدم */
+    const byLegacy = {};
+    Object.keys(prev).forEach(id => {
+      const rec = prev[id];
+      if (!rec) return;
+      byLegacy[legacyKey(rec.facilityKey, rec.text, rec.visitDate)] = rec;
+    });
 
     (Array.isArray(reports) ? reports : []).forEach(r => {
       recsFromReport(r).forEach(fresh => {
         seen[fresh.id] = true;
-        const old = prev[fresh.id];
+        /* نبحث بالمعرّف الجديد، ثم بالمفتاح البديل (ترحيل) */
+        const old = prev[fresh.id] ||
+          byLegacy[legacyKey(fresh.facilityKey, fresh.text, fresh.visitDate)];
         if (old) {
+          seen[old.id] = true;      /* لا يُعاد إدراجه كتوصية يتيمة */
           /* نحفظ ما عدّله المستخدم، ونُحدّث ما جاء من التقرير */
           out[fresh.id] = Object.assign({}, fresh, {
+            id: fresh.id,             /* المعرّف الجديد الثابت */
             status: old.status || fresh.status,
             note: old.note || '',
             evidence: old.evidence || '',
@@ -280,14 +328,31 @@ window.ADMHReport = window.ADMHReport || {};
   }
 
   /**
+   * يعيد كائن التوصيات من أي شكل مُمرَّر.
+   * -----------------------------------------------------------------------------
+   * سبب هذا: `buildRecs` تُعيد **كائن التوصيات** لتُسنَد إلى `registry.recs`،
+   * بينما `updateRec` تتوقّع **السجل كاملاً**. وهذا الاختلاف أوقع خطأً حقيقياً
+   * في اختبار (مرّر كائن التوصيات فلم يُحفظ التعديل بصمت).
+   *
+   * فنقبل الشكلين: من فيه `recs` نأخذ `recs`، وإلا فهو كائن التوصيات نفسه.
+   */
+  function recsOf(registryLike) {
+    if (!registryLike || typeof registryLike !== 'object') return null;
+    if (registryLike.recs && typeof registryLike.recs === 'object') return registryLike.recs;
+    return registryLike;
+  }
+
+  /**
    * يحدّث توصية واحدة. أي تعديل يختم updatedAt ليُزامَن.
+   * يقبل السجل كاملاً أو كائن التوصيات وحده.
    * @param {object} registry
    * @param {string} id
    * @param {object} patch الحقول المتغيّرة
    */
   function updateRec(registry, id, patch) {
-    if (!registry || !registry.recs || !registry.recs[id]) return false;
-    const rec = registry.recs[id];
+    const recs = recsOf(registry);
+    if (!recs || !recs[id]) return false;
+    const rec = recs[id];
     Object.keys(patch || {}).forEach(k => {
       if (k === 'id' || k === 'facilityKey') return;   /* لا تُعدَّل */
       rec[k] = patch[k];
@@ -300,13 +365,18 @@ window.ADMHReport = window.ADMHReport || {};
   }
 
   /** يضيف توصية يدوية (بلا تقرير) */
+  /**
+   * يضيف توصية يدوية (بلا تقرير).
+   * المعرّف مشتق من المؤسسة والنص فقط — فلا يعتمد على عدد التوصيات.
+   */
   function addManualRec(registry, facKey, text, owner) {
     const txt = tidy(text);
     if (!txt) return null;
-    const id = recId(facKey, 'M' + Object.keys(registry.recs).length, txt);
+    const today = new Date().toISOString().slice(0, 10);
+    const id = recId(facKey, txt, today);
     registry.recs[id] = {
       id: id, facilityKey: facKey || '', text: txt,
-      sourceReportId: '', visitDate: new Date().toISOString().slice(0, 10),
+      sourceReportId: '', visitDate: today,
       dueDate: null, owner: tidy(owner), status: 'pending',
       note: '', evidence: '', verifiedAt: null,
       updatedAt: new Date().toISOString(), manual: true,
