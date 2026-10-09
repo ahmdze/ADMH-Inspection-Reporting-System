@@ -81,14 +81,69 @@ window.ADMHReport = window.ADMHReport || {};
      النسخ إلى الحافظة
      يجرّب النسخ الغني (HTML) أولاً، ثم النص العادي
      ========================================================================= */
-  function copyReport() {
-    const area = $('#docPreview');                        /* منطقة المعاينة */
+  const COPY_MODES = {
+    all: { label: 'المعلومات بالكامل', success: 'تم نسخ المعلومات بالكامل بتنسيقها ✓' },
+    'without-header': { label: 'المعلومات دون الترويسة', success: 'تم النسخ دون الترويسة ✓' },
+    'without-header-recs': { label: 'المعلومات دون الترويسة والتوصيات', success: 'تم النسخ دون الترويسة والتوصيات ✓' },
+    recommendations: { label: 'التوصيات فقط', success: 'تم نسخ التوصيات بتنسيقها ✓' },
+  };
+
+  /* يعزل الجزء المطلوب من المعاينة دون تعديل التقرير الأصلي. */
+  function buildCopyFragment(area, mode) {
+    const clone = area.cloneNode(true);
+    clone.removeAttribute('id');
+
+    const headings = Array.from(clone.querySelectorAll('h2'));
+    const recHeading = headings.find(h => h.textContent.trim() === 'التوصيات');
+
+    if (mode === 'without-header' || mode === 'without-header-recs') {
+      clone.querySelectorAll('.hdr').forEach(el => el.remove());
+    }
+
+    if (mode === 'without-header-recs') {
+      if (recHeading) {
+        let node = recHeading;
+        while (node) {
+          const next = node.nextElementSibling;
+          node.remove();
+          if (!next || next.tagName === 'H2') break;
+          node = next;
+        }
+      }
+    } else if (mode === 'recommendations') {
+      if (!recHeading) return null;
+      const onlyRecs = document.createElement('div');
+      onlyRecs.className = clone.className;
+      onlyRecs.setAttribute('dir', 'rtl');
+      let node = recHeading;
+      while (node && node.tagName !== 'H2' || node === recHeading) {
+        const next = node.nextElementSibling;
+        onlyRecs.appendChild(node.cloneNode(true));
+        if (!next || next.tagName === 'H2') break;
+        node = next;
+      }
+      return onlyRecs;
+    }
+
+    return clone;
+  }
+
+  function copyReport(mode = 'all') {
+    const area = $('#docPreview');
     if (!area) { NS.toast('افتح المعاينة أولاً', 'warn'); return; }
 
-    const html = area.innerHTML;                          /* التنسيق كما يظهر */
-    const text = buildPlainText(NS.buildModel());         /* نص منسّق كخطة بديلة */
+    const selectedMode = COPY_MODES[mode] ? mode : 'all';
+    const fragment = buildCopyFragment(area, selectedMode);
+    if (!fragment || !fragment.innerHTML.trim()) {
+      NS.toast(selectedMode === 'recommendations' ? 'لا توجد توصيات لنسخها' : 'لا توجد معلومات لنسخها', 'warn');
+      return;
+    }
 
-    /* الطريقة الحديثة: تنسخ HTML ونصاً معاً */
+    const html = fragment.outerHTML;
+    const text = (fragment.innerText || fragment.textContent || '').trim();
+    const successMessage = COPY_MODES[selectedMode].success;
+
+    /* نسخ HTML ونص عادي معاً للحفاظ على التنسيق عند اللصق في Word. */
     if (navigator.clipboard && window.ClipboardItem) {
       try {
         const item = new ClipboardItem({
@@ -96,36 +151,44 @@ window.ADMHReport = window.ADMHReport || {};
           'text/plain': new Blob([text], { type: 'text/plain' }),
         });
         navigator.clipboard.write([item])
-          .then(() => NS.toast('نُسخ التقرير بتنسيقه ✓', 'ok'))
-          .catch(() => fallbackCopy(html, text));
+          .then(() => NS.toast(successMessage, 'ok'))
+          .catch(() => fallbackCopy(html, text, successMessage));
         return;
       } catch (e) { /* ننتقل إلى الطريقة البديلة */ }
     }
-    fallbackCopy(html, text);                             /* خطة بديلة */
+    fallbackCopy(html, text, successMessage);
   }
 
   /* =========================================================================
      خطة بديلة: نحدّد محتوى المعاينة ثم ننفّذ أمر النسخ
      تعمل في المتصفحات التي لا تدعم ClipboardItem
      ========================================================================= */
-  function fallbackCopy(html, text) {
-    const area = $('#docPreview');
-    if (!area) return;
+  function fallbackCopy(html, text, successMessage = 'نُسخ التقرير بتنسيقه ✓') {
+    let holder;
     try {
-      const range = document.createRange();               /* تحديد المحتوى */
-      range.selectNodeContents(area);
+      holder = document.createElement('div');
+      holder.contentEditable = 'true';
+      holder.style.cssText = 'position:fixed;inset-inline-start:-99999px;top:0;opacity:0;pointer-events:none;';
+      holder.innerHTML = html;
+      document.body.appendChild(holder);
+
+      const range = document.createRange();
+      range.selectNodeContents(holder);
       const sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(range);
-      const ok = document.execCommand('copy');            /* أمر النسخ */
+      const ok = document.execCommand('copy');
       sel.removeAllRanges();
-      if (ok) { NS.toast('نُسخ التقرير بتنسيقه ✓', 'ok'); return; }
-    } catch (e) { /* ننتقل إلى النص العادي */ }
+      holder.remove();
+      holder = null;
+      if (ok) { NS.toast(successMessage, 'ok'); return; }
+    } catch (e) {
+      if (holder) holder.remove();
+    }
 
-    /* آخر حل: نسخ النص العادي */
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text)
-        .then(() => NS.toast('نُسخ التقرير كنص ✓', 'ok'))
+        .then(() => NS.toast('نُسخ النص ✓', 'ok'))
         .catch(() => NS.copyByTextarea(text));
     } else {
       NS.copyByTextarea(text);
