@@ -116,7 +116,7 @@ window.ADMHReport = window.ADMHReport || {};
       onlyRecs.className = clone.className;
       onlyRecs.setAttribute('dir', 'rtl');
       let node = recHeading;
-      while (node && node.tagName !== 'H2' || node === recHeading) {
+      while (node && (node.tagName !== 'H2' || node === recHeading)) {
         const next = node.nextElementSibling;
         onlyRecs.appendChild(node.cloneNode(true));
         if (!next || next.tagName === 'H2') break;
