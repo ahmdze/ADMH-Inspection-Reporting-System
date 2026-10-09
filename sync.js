@@ -433,23 +433,66 @@
           return;
         }
 
+        /* -----------------------------------------------------------------
+           بناء بيانات اعتماد Google → Firebase.
+           -----------------------------------------------------------------
+           نقطة دقيقة: credential() **دالة ثابتة على الصنف**
+           (GoogleAuthProvider.credential)، وليست دالة على الكائن الذي
+           يُنشئه new GoogleAuthProvider().
+
+           كان الكود يستدعيها على الكائن، فتفشل على بعض المتصفحات/النسخ
+           برسالة مضلِّلة عن «عدم الدعم». هنا نجرّب الطرق بالترتيب:
+             ١) الدالة الثابتة على الصنف (الطريقة الصحيحة)
+             ٢) الدالة على الكائن (احتياطاً لنسخ compat)
+             ٣) إرفاق الدالة الثابتة بالكائن ثم استعمالها
+           ----------------------------------------------------------------- */
         try {
           const provider = googleProvider();
-          if (typeof provider.credential !== 'function') {
-            const e = new Error('نسخة مكتبة Firebase لا تدعم تحويل رمز Google. حدّث الصفحة وأعد المحاولة.');
-            e.code = 'auth/operation-not-supported-in-this-environment';
+          const g = global.firebase;
+          const Klass = (g && g.auth && g.auth.GoogleAuthProvider) || null;
+
+          let cred = null;
+          let how = '';
+
+          /* ١) الثابتة على الصنف — الطريقة الصحيحة */
+          if (Klass && typeof Klass.credential === 'function') {
+            cred = Klass.credential(idToken || null, accessToken || null);
+            how = 'static';
+          }
+          /* ٢) على الكائن مباشرةً */
+          if (!cred && provider && typeof provider.credential === 'function') {
+            cred = provider.credential(idToken || null, accessToken || null);
+            how = 'instance';
+          }
+          /* ٣) نُرفق الثابتة بالكائن ثم نستعملها */
+          if (!cred && Klass && typeof Klass.credential === 'function' && provider) {
+            provider.credential = Klass.credential;
+            cred = provider.credential(idToken || null, accessToken || null);
+            how = 'attached';
+          }
+
+          if (!cred) {
+            const e = new Error(
+              'تعذّر بناء بيانات اعتماد Google من مكتبة Firebase.\n' +
+              'GoogleAuthProvider.credential غير متاحة — تحقق من تحميل مكتبة Firebase.');
+            e.code = 'auth/gis-credential-unavailable';
             throw e;
           }
-          const cred = provider.credential(idToken || null, accessToken || null);
-          gisTrace('credential', 'idToken=' + (idToken ? 'نعم' : 'لا') + ' · accessToken=' + (accessToken ? 'نعم' : 'لا'));
+
+          gisTrace('credential', 'الطريقة=' + how +
+            ' · idToken=' + (idToken ? 'نعم' : 'لا') +
+            ' · accessToken=' + (accessToken ? 'نعم' : 'لا'));
+
           fb.auth.signInWithCredential(cred).then(c => {
             gisTrace('signin:ok', (c && c.user && c.user.email) || 'مستخدم');
             finish(resolve, { user: (c && c.user) || c });
           }).catch(err => {
+            gisTrace('signin:fail', ((err && err.code) || '') + ' ' + ((err && err.message) || ''));
             cleanupWatchers();
             finish(reject, err);
           });
         } catch (convErr) {
+          gisTrace('convert:fail', (convErr && convErr.message) || String(convErr));
           cleanupWatchers();
           finish(reject, convErr);
         }
@@ -946,6 +989,10 @@
     }
     if (code === 'auth/internal-error' || /internal-error/i.test(msg)) {
       return 'خطأ داخلي من Firebase. يرجى فتح الموقع في متصفح Chrome والتأكد من السماح بالنوافذ المنبثقة للرابط.';
+    }
+    if (code === 'auth/gis-credential-unavailable') {
+      return 'تعذّر بناء بيانات اعتماد Google من مكتبة Firebase.\n' +
+        'هذا عطل داخلي لا علاقة له بالنوافذ المنبثقة — أعد تحميل الصفحة، وإن تكرّر فأرسل سجل الخطوات من صفحة الفحص.';
     }
     if (code === 'auth/operation-not-supported-in-this-environment' || code === 'auth/popup-blocked') {
       return 'المتصفح يمنع فتح النافذة المنبثقة للدخول. يرجى الضغط على خيار السماح بالنوافذ المنبثقة لهذا الموقع في المتصفح ثم أعد المحاولة.';

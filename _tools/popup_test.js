@@ -55,16 +55,36 @@ function makeEnv(o) {
     },
     getRedirectResult() { calls.getRedirect++; return Promise.resolve(currentUser ? { user: currentUser } : null); },
     signInWithCredential(cred) {
-      calls.credential++;
+      /* العدّ يتم عند **بناء** الاعتماد لا عند استخدامه */
       if (o.gisCredFails) { const e = new Error('bad token'); e.code = 'auth/invalid-credential'; return Promise.reject(e); }
       currentUser = { uid: 'gis1', email: 'gis@gmail.com' };
       return Promise.resolve({ user: currentUser });
     },
     signOut() { currentUser = null; return Promise.resolve(); },
-    GoogleAuthProvider: class {
-      setCustomParameters() {}
-      credential(token) { return { __token: token }; }
-    },
+    /* ---------------------------------------------------------------------
+       في Firebase الحقيقي: credential() **دالة ثابتة على الصنف**
+       (GoogleAuthProvider.credential)، وليست على الكائن.
+       نُتيح هنا اختيار الشكل لفحص كل المسارات.
+       --------------------------------------------------------------------- */
+    GoogleAuthProvider: (function () {
+      function GAP() { this.setCustomParameters = function () {}; }
+      const shape = o.credShape || 'both';
+      /* نعدّ مرة واحدة فقط: الثابتة إن وُجدت، وإلا على الكائن */
+      if (shape === 'both' || shape === 'static') {
+        GAP.credential = function (idToken, accessToken) {
+          calls.credential++;
+          return { __idToken: idToken, __accessToken: accessToken, __how: 'static' };
+        };
+      }
+      if (shape === 'both' || shape === 'instance') {
+        /* على الكائن: يعدّ فقط إن لم تكن الثابتة موجودة */
+        GAP.prototype.credential = function (idToken, accessToken) {
+          if (!GAP.credential) calls.credential++;
+          return { __idToken: idToken, __accessToken: accessToken, __how: 'instance' };
+        };
+      }
+      return GAP;
+    })(),
   };
 
   const firebase = {
@@ -439,6 +459,34 @@ const check = (n, c, d) => { if (c) { pass++; console.log('  ✓ ' + n); } else 
     const e = makeEnv({ gClient: '222-saved.apps.googleusercontent.com' });
     check('المحفوظ على الجهاز يتقدّم',
       e.S.googleClientId() === '222-saved.apps.googleusercontent.com', e.S.googleClientId());
+  }
+
+  console.log('\n=== بناء بيانات الاعتماد: الثابتة على الصنف (سبب عطل الهاتف) ===');
+  {
+    /* العطل الحقيقي: credential() دالة ثابتة على GoogleAuthProvider،
+       والكود كان يستدعيها على الكائن — فتفشل برسالة مضلِّلة عن «عدم
+       الدعم»، ثم يسقط إلى نافذة Firebase التي يفشل فتحها على الهاتف. */
+    const e1 = makeEnv({ credShape: 'static' });     /* الشكل الصحيح */
+    const c1 = await e1.S.connect();
+    check('تعمل حين تكون ثابتة على الصنف فقط', !!c1.email, c1.email);
+    check('وبُنيت بالطريقة الصحيحة',
+      /الطريقة=static/.test(((e1.S.gisDiagnostics().trace || [])
+        .find(x => x.step === 'credential') || {}).detail || ''),
+      (e1.S.gisDiagnostics().trace || []).find(x => x.step === 'credential'));
+
+    const e2 = makeEnv({ credShape: 'instance' });   /* الشكل القديم فقط */
+    const c2 = await e2.S.connect();
+    check('وتعمل أيضاً حين تكون على الكائن فقط', !!c2.email, c2.email);
+
+    const e3 = makeEnv({ credShape: 'none' });       /* غير متاحة إطلاقاً */
+    let err = null;
+    try { await e3.S.connect(); } catch (x) { err = x; }
+    check('وغيابها يُنتج خطأً صريحاً لا رسالة نوافذ مضلِّلة',
+      !!(err && !/يرجى الضغط على خيار السماح/.test(err.message)),
+      err && err.message.slice(0, 80));
+    check('ورسالة الخطأ تذكر بيانات الاعتماد',
+      !!(err && /بيانات اعتماد|GoogleAuthProvider/.test(err.message)),
+      err && err.message.slice(0, 80));
   }
 
   console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
