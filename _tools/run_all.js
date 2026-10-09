@@ -22,6 +22,21 @@ const ROOT = path.resolve(__dirname, '..');
 const TOOLS = path.join(ROOT, '_tools');
 
 /* -----------------------------------------------------------------------------
+   كنس بقايا Chrome قبل البدء.
+   -----------------------------------------------------------------------------
+   عطل حقيقي: كل تشغيل كان يترك مجلد ملف تعريف في %TEMP%، فتراكمت حتى امتلأ
+   القرص (٧٨٧ ميجابايت) وتعلّق Chrome وصارت الاختبارات تفشل بلا سبب ظاهر.
+   نكنس القديم (أكثر من ساعة) فقط، فلا نلمس تشغيلاً جارياً.
+   ----------------------------------------------------------------------------- */
+try {
+  const swept = require('./clean_chrome_temp.js').sweep({});
+  if (swept.removed && !process.argv.includes('--json')) {
+    console.log('نُظّفت بقايا Chrome: ' + swept.removed + ' مجلداً · ' +
+      (swept.freed / 1024 / 1024).toFixed(1) + ' م.ب\n');
+  }
+} catch (e) { /* الكنس تحسين لا أكثر */ }
+
+/* -----------------------------------------------------------------------------
    المجموعات.
    `browser: true` تعني أنها تُشغّل Chrome فعلياً — أبطأ لكنها تفحص ما يراه
    المستخدم. `unit: true` منطق خالص بلا متصفح.
@@ -38,6 +53,7 @@ const GROUPS = [
   { file: 'sw_test.js',            browser: false, what: 'استراتيجية تخزين عامل الخدمة' },
   { file: 'domain_test.js',        browser: false, what: 'ذكر النطاق الحقيقي في الرسائل' },
   { file: 'assetsignore_test.js',  browser: false, what: 'أنماط .assetsignore تستثني الصحيح وتُبقي المهم' },
+  { file: 'tooling_test.js',       browser: false, what: 'قارئ ZIP وخادم الاختبار وكنس Chrome' },
 
   /* --- متصفح حقيقي --- */
   { file: 'notables_test.js',      browser: true,  what: 'النطاق، العنوان التلقائي، خلوّ Word من الجداول' },

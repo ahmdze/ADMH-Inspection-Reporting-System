@@ -111,32 +111,46 @@ const os = require('os');
 const { spawnSync } = require('child_process');
 
 let profileDir = null;
-let cleaned = false;
 
 /** يُنشئ مجلد ملف تعريف مؤقّتاً (مرة واحدة لكل عملية) */
 function profilePath() {
   if (profileDir) return profileDir;
+
   /* ---------------------------------------------------------------------
-     نختار قرصاً فيه مساحة، لا القرص الذي فيه مجلد النظام.
-     ---------------------------------------------------------------------
-     عطل حقيقي: كان مجلد النظام على قرص ممتلئ (٥٠ ميجابايت متاحة)، وChrome
-     يحتاج مئات الميجابايت لملف تعريفه المؤقّت — فتعلّق بلا رسالة خطأ واضحة.
-     نجرّب TEMP ثم القرص الجذر للمشروع، ونقيس المساحة المتاحة فعلاً.
+     ⚠️ درس مهم:
+     كان هذا يُعيد المجلد الأب مباشرةً — وصار `os.tmpdir()` نفسه!
+     وبما أن `cleanProfile` يحذف المجلد كاملاً، كان يحذف **كل محتوى
+     مجلد النظام المؤقت**. عطل خطير كُشف باختبار يتحقق من أن المسار
+     ليس مجلد النظام.
+
+     القاعدة الآن صارمة: نُعيد **مجلداً فرعياً فريداً** دائماً، ولا نُعيد
+     أي مسار قائم مسبقاً.
      --------------------------------------------------------------------- */
-  const candidates = [];
-  try { candidates.push(os.tmpdir()); } catch (e) { /* تجاهل */ }
-  candidates.push(path.join(ROOT, '.chrome-tmp'));
+  const parents = [];
+  try { parents.push(os.tmpdir()); } catch (e) { /* تجاهل */ }
+  parents.push(path.join(ROOT, '.chrome-tmp'));
 
-  const base = chooseWritable(candidates) ||
-    path.join(os.tmpdir(), 'admh-chrome-' + process.pid);
+  const parent = chooseWritable(parents) || (() => {
+    try { return os.tmpdir(); } catch (e) { return ROOT; }
+  })();
 
-  try { fs.mkdirSync(base, { recursive: true }); } catch (e) { /* سنعمل بلا ملف تعريف */ }
-  profileDir = base;
+  const unique = 'admh-chrome-' + process.pid + '-' + Date.now().toString(36);
+  const dir = path.join(parent, unique);
+
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* سنعمل بلا ملف تعريف */ }
+
+  /* تأكيد أخير: لا يجوز أن يكون المسار مجلد النظام أو جذره */
+  if (dir === parent || dir === ROOT) {
+    return null;      /* نعمل بلا ملف تعريف — أسلم من حذف مجلد النظام */
+  }
+
+  profileDir = dir;
   return profileDir;
 }
 
 /**
- * يختار أول مسار قابل للكتابة وفيه مساحة كافية.
+ * يختار أول مسار أب قابل للكتابة وفيه مساحة كافية.
+ * **لا يُعيد مسار ملف تعريف** — بل المجلد الأب فقط.
  * @param {string[]} list
  * @param {number} [needMB] المساحة المطلوبة بالميجابايت
  */
@@ -146,15 +160,14 @@ function chooseWritable(list, needMB) {
     try {
       fs.mkdirSync(p, { recursive: true });
       /* نكتب ملفاً فعلياً — الوجود وحده لا يكفي */
-      const probe = path.join(p, '.admh-write-probe-' + Date.now());
+      const probe = path.join(p, '.admh-write-probe-' + process.pid + '-' + Date.now());
       fs.writeFileSync(probe, 'x');
       fs.unlinkSync(probe);
-      /* هل فيه مساحة كافية؟ (checkDiskSpace متاح في Node 18.15+) */
+      /* هل فيه مساحة كافية؟ */
       try {
         if (typeof fs.statfsSync === 'function') {
           const st = fs.statfsSync(p);
-          const free = st.bavail * st.bsize;
-          if (free < need) continue;
+          if (st.bavail * st.bsize < need) continue;
         }
       } catch (e) { /* بلا قياس: نقبله إن كان قابلاً للكتابة */ }
       return p;
@@ -163,11 +176,28 @@ function chooseWritable(list, needMB) {
   return null;
 }
 
-/** يحذف مجلد ملف التعريف */
+/**
+ * يحذف مجلد ملف التعريف. آمن للاستدعاء مرات متعددة.
+ * -----------------------------------------------------------------------------
+ * ⚠️ حماية صارمة: لا نحذف إلا مجلداً **أنشأناه نحن**، ولا نحذف أبداً
+ *    مجلد النظام المؤقت أو جذر المشروع. عطل سابق جعل هذا يحذف كل محتوى
+ *    مجلد النظام المؤقت — وهذا ما تمنعه هذه الفحوص.
+ * -----------------------------------------------------------------------------
+ */
 function cleanProfile() {
-  if (cleaned || !profileDir) return;
-  cleaned = true;
-  try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch (e) { /* تجاهل */ }
+  if (!profileDir) return;
+  const dir = profileDir;
+  /* نُصفّر الحالة أولاً حتى يُنشئ أي طلب تالٍ مجلداً جديداً */
+  profileDir = null;
+
+  /* لا نحذف إلا ما يبدأ باسمنا، وليس مجلد النظام */
+  const base = path.basename(dir);
+  const isOurs = /^admh-chrome-/.test(base);
+  const isSystem = (() => { try { return dir === os.tmpdir(); } catch (e) { return true; } })();
+  const isRoot = dir === ROOT || dir === path.dirname(ROOT);
+  if (!isOurs || isSystem || isRoot) return;
+
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* تجاهل */ }
 }
 
 /* نُنظّف عند أي طريقة خروج — وإلا تراكمت الملفات مرة أخرى */

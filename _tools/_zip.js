@@ -43,13 +43,15 @@ function listEntries(buf) {
   for (let i = 0; i < count; i++) {
     if (p + 46 > buf.length || buf.readUInt32LE(p) !== SIG_CENTRAL) break;
     const method = buf.readUInt16LE(p + 10);
-    const size = buf.readUInt32LE(p + 24);            /* الحجم المضغوط */
+    /* ترتيب المواصفة: ٢٠ = الحجم المضغوط · ٢٤ = الحجم الأصلي */
+    const compSize = buf.readUInt32LE(p + 20);
+    const rawSize = buf.readUInt32LE(p + 24);
     const nameLen = buf.readUInt16LE(p + 28);
     const extraLen = buf.readUInt16LE(p + 30);
     const commentLen = buf.readUInt16LE(p + 32);
     const localOff = buf.readUInt32LE(p + 42);
     const name = buf.slice(p + 46, p + 46 + nameLen).toString('utf8');
-    out.push({ name, method, size, offset: localOff });
+    out.push({ name, method, size: compSize, rawSize, offset: localOff });
     p += 46 + nameLen + extraLen + commentLen;
   }
   return out;
@@ -63,15 +65,27 @@ function listEntries(buf) {
  */
 function readEntry(buf, entry) {
   const lo = entry.offset;
+  if (lo < 0 || lo + 30 > buf.length) throw new Error('موضع غير صالح للمدخل: ' + entry.name);
   if (buf.readUInt32LE(lo) !== SIG_LOCAL) throw new Error('رأس محلي غير صالح: ' + entry.name);
 
   const nameLen = buf.readUInt16LE(lo + 26);
   const extraLen = buf.readUInt16LE(lo + 28);
   const start = lo + 30 + nameLen + extraLen;
-  const raw = buf.slice(start, start + entry.size);
+  if (start > buf.length) throw new Error('بيانات المدخل خارج الأرشيف: ' + entry.name);
+
+  /* نقطع بحجم البيانات **المضغوطة** المتاح فعلاً — الأرشيف قد يكون مبتوراً */
+  const avail = Math.min(entry.size, buf.length - start);
+  if (avail <= 0) return Buffer.alloc(0);
+  const raw = buf.slice(start, start + avail);
 
   if (entry.method === 0) return raw;                  /* بلا ضغط */
-  if (entry.method === 8) return zlib.inflateRawSync(raw);  /* Deflate */
+  if (entry.method === 8) {
+    try {
+      return zlib.inflateRawSync(raw);
+    } catch (e) {
+      throw new Error('تعذّر فكّ ضغط المدخل «' + entry.name + '»: ' + e.message);
+    }
+  }
   throw new Error('طريقة ضغط غير مدعومة: ' + entry.method);
 }
 
@@ -82,14 +96,19 @@ function readZipFile(file) {
 
 /**
  * يستخرج نصاً من ملف داخل الأرشيف.
+ * لا ينهار على أرشيف تالف — يُعيد null ليتعامل المستدعي مع الغياب.
  * @param {Buffer} buf
  * @param {string} name
  * @returns {string|null}
  */
 function textOf(buf, name) {
-  const e = listEntries(buf).find(x => x.name === name);
-  if (!e) return null;
-  return readEntry(buf, e).toString('utf8');
+  try {
+    const e = listEntries(buf).find(x => x.name === name);
+    if (!e) return null;
+    return readEntry(buf, e).toString('utf8');
+  } catch (err) {
+    return null;
+  }
 }
 
 /**
@@ -99,7 +118,7 @@ function textOf(buf, name) {
  */
 function docxText(buf) {
   const xml = textOf(buf, 'word/document.xml');
-  if (xml == null) throw new Error('الملف لا يحتوي word/document.xml');
+  if (xml == null) throw new Error('الملف لا يحتوي word/document.xml صالحاً');
   const parts = [];
   const rx = /<w:t[^>]*>([^<]*)<\/w:t>/g;
   let m;
