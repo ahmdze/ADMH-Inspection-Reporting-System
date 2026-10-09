@@ -35,6 +35,11 @@ function renderPreview() {
   if (M.sections.some(s => s.heading === 'بيانات المؤسسة')) { /* already ordered */ }
 
   M.sections.forEach(s => {
+    /* فاصل المحور: «المحور الإداري //» — فاصل مميّز، بلا خط تحته */
+    if (s.type === 'axis') {
+      H.push(`<h2 class="axis">${esc(s.heading)}</h2>`);
+      return;
+    }
     H.push(`<h2>${esc(s.heading)}</h2>`);
     if (s.type === 'kv') {
       (s.rows || []).forEach(r => H.push(`<p><b>${esc(r[0])}:</b> ${esc(r[1])}</p>`));

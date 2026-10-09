@@ -80,16 +80,16 @@ function __reportTest() {
       staffSec && /النفوس/.test(staffSec.items[staffSec.items.length - 2] || '') &&
       /العوائل/.test(staffSec.items[staffSec.items.length - 1] || ''),
       staffSec && staffSec.items.slice(-2));
-    var adminHeadingIndex = (M.sections || []).findIndex(function (s) { return s.heading === 'المحور الاداري/'; });
+    var adminHeadingIndex = (M.sections || []).findIndex(function (s) { return s.type === 'axis'; });
     var fingerprintIndex = (M.sections || []).findIndex(function (s) { return s.heading === 'أولاً: وحدة البصمة'; });
-    check('administrative heading follows staff and precedes fingerprint section',
+    check('axis divider follows staff and precedes the fingerprint section',
       adminHeadingIndex > (M.sections || []).indexOf(staffSec) && adminHeadingIndex < fingerprintIndex,
       { adminHeadingIndex: adminHeadingIndex, fingerprintIndex: fingerprintIndex });
-    check('administrative heading appears in plain text in the expected order',
+    check('axis divider appears in the plain text in the expected order',
       (function () {
         var plain = NS.buildPlainText(M);
-        return plain.indexOf('عدد العوائل المسجلة: 3120') < plain.indexOf('المحور الاداري/') &&
-          plain.indexOf('المحور الاداري/') < plain.indexOf('أولاً: وحدة البصمة');
+        return plain.indexOf('عدد العوائل المسجلة: 3120') < plain.indexOf('المحور الإداري //') &&
+          plain.indexOf('المحور الإداري //') < plain.indexOf('أولاً: وحدة البصمة');
       })());
 
     /* ---------- (٤) الاسم يظهر مع العنوان الوظيفي ---------- */

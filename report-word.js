@@ -139,6 +139,24 @@ function exportWord() {
 
   /* الأقسام */
   M.sections.forEach(s => {
+    /* -----------------------------------------------------------------
+       فاصل المحور: «المحور الإداري //»
+       -----------------------------------------------------------------
+       كان نوعه 'heading' ولا يعالجه أي مصيّر — فيُسقط صامتاً ولا يظهر
+       في ملف Word. الآن له نوع خاص وتنسيق مميّز: بلا خط فاصل، وبتباعد
+       أوضح قبله، ليكون فاصلاً بصرياً بين ترويسة التقرير وأقسامه.
+       ----------------------------------------------------------------- */
+    if (s.type === 'axis') {
+      children.push(para(s.heading, {
+        heading: HeadingLevel.HEADING_2,
+        size: baseHalf + 4, bold: true, color: '004D40',
+        align: AlignmentType.RIGHT,
+        before: 300, after: 160,
+        /* بلا border: الفاصل لا يُرسم تحته خطّ */
+      }));
+      return;                       /* لا محتوى له — فاصل فقط */
+    }
+
     children.push(para(s.heading, { heading: HeadingLevel.HEADING_2, size: baseHalf + 2, bold: true, color: '004D40', before: 180, after: 70, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '00796B', space: 3 } } }));
     if (s.type === 'kv') {
       (s.rows || []).forEach(r => children.push(para([r[0] ? r[0] + ': ' : '', r[1]].join(''), { after: 20 })));

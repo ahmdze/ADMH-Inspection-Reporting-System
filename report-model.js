@@ -82,7 +82,10 @@ function buildModel() {
   if (t(r.families)) staffRows.push(`عدد العوائل المسجلة: ${normalizeDigits(r.families)}`);
   if (staffRows.length) M.sections.push({ type: 'list', heading: 'الملاك الكلي والفعلي', items: staffRows, numbered: false });
 
-  M.sections.push({ type: 'heading', heading: 'المحور الاداري/' });
+  /* فاصل المحور — بالنص والصيغة نفسيهما المستخدمين في النماذج الأصلية:
+     «المحور الإداري //» بهمزة على الألف وبشرتين مائلتين.
+     نوعه 'axis' ليتلقّى تنسيقاً مميّزاً في Word والمعاينة والنسخ. */
+  M.sections.push({ type: 'axis', heading: 'المحور الإداري //' });
 
   /* أولاً: وحدة البصمة */
   const fp = r.fp;

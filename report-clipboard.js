@@ -38,6 +38,13 @@ window.ADMHReport = window.ADMHReport || {};
     blank();
 
     (M.sections || []).forEach(s => {                   /* كل قسم من أقسام التقرير */
+      /* فاصل المحور: «المحور الإداري //» — سطر مستقل بلا خط تحته */
+      if (s.type === 'axis') {
+        blank();
+        add(s.heading);
+        blank();
+        return;
+      }
       add(s.heading);                                   /* عنوان القسم */
       add('-'.repeat(Math.min(50, (s.heading || '').length + 2)));
 
@@ -133,14 +140,17 @@ window.ADMHReport = window.ADMHReport || {};
     if (!area) { NS.toast('افتح المعاينة أولاً', 'warn'); return; }
 
     const selectedMode = COPY_MODES[mode] ? mode : 'all';
-    const fragment = buildCopyFragment(area, selectedMode);
-    if (!fragment || !fragment.innerHTML.trim()) {
+
+    /* نبني نسخة **بأنماط مضمَّنة** لتحمل التنسيق معها أينما لُصقت.
+       بلا هذا، يكون المنسوخ أصنافاً فقط ولا CSS خارج الموقع لتُطبّقها. */
+    const built = buildStyledCopy(area, selectedMode);
+    if (!built || !built.html.trim() || !built.text) {
       NS.toast(selectedMode === 'recommendations' ? 'لا توجد توصيات لنسخها' : 'لا توجد معلومات لنسخها', 'warn');
       return;
     }
 
-    const html = fragment.outerHTML;
-    const text = (fragment.innerText || fragment.textContent || '').trim();
+    const html = built.html;
+    const text = built.text;
     const successMessage = COPY_MODES[selectedMode].success;
 
     /* نسخ HTML ونص عادي معاً للحفاظ على التنسيق عند اللصق في Word. */
@@ -160,9 +170,119 @@ window.ADMHReport = window.ADMHReport || {};
   }
 
   /* =========================================================================
-     خطة بديلة: نحدّد محتوى المعاينة ثم ننفّذ أمر النسخ
-     تعمل في المتصفحات التي لا تدعم ClipboardItem
+     تنسيق مضمَّن قبل النسخ
+     =========================================================================
+     سبب المشكلة: ما نُسخه سابقاً كان **أصنافاً** فقط (class="doc"، <h2>)
+     بلا أي أنماط. وعند اللصق خارج الموقع (Word، البريد، محرّر نصوص) لا يوجد
+     ملف CSS ليُطبّقها — فيظهر النص مجرّداً بلا تنسيق.
+
+     الحل: ننسخ **الأنماط المحسوبة** من المعاينة ونكتبها مضمَّنة في كل عنصر،
+     فيحمل النص المنسوخ تنسيقه معه أينما لُصق.
      ========================================================================= */
+  const STYLE_PROPS = [
+    'fontWeight', 'fontStyle', 'textDecoration', 'fontSize', 'fontFamily',
+    'color', 'backgroundColor', 'textAlign', 'direction',
+    'marginTop', 'marginBottom', 'paddingTop', 'paddingBottom',
+    'borderBottom', 'borderTop', 'letterSpacing', 'lineHeight',
+  ];
+
+  /**
+   * يكتب الأنماط المحسوبة مضمَّنة في عناصر الشجرة.
+   * @param {Element} source العنصر الأصلي في المعاينة
+   * @param {Element} target العنصر المقابل في الشجرة المنسوخة
+   */
+  function inlineStyles(source, target) {
+    if (!source || !target) return;
+    try {
+      const cs = window.getComputedStyle(source);
+      const css = [];
+
+      STYLE_PROPS.forEach(prop => {
+        const v = cs[prop];
+        if (!v || v === 'normal' || v === 'auto' || v === 'none') return;
+        /* نتجاهل الافتراضيات الطويلة بلا داعٍ */
+        if (prop === 'fontFamily') {
+          const first = String(v).split(',')[0].replace(/["']/g, '').trim();
+          if (!first) return;
+          css.push('font-family:' + first);
+          return;
+        }
+        /* حدود سفلية صفرية لا داعي لها */
+        if ((prop === 'borderBottom' || prop === 'borderTop') &&
+            /0px|none/.test(String(v))) return;
+        /* ألوان الخلفية الشفافة تُهمَل */
+        if (prop === 'backgroundColor' &&
+            /rgba?\(0,\s*0,\s*0,\s*0\)|transparent/.test(String(v))) return;
+        const kebab = prop.replace(/[A-Z]/g, m => '-' + m.toLowerCase());
+        css.push(kebab + ':' + v);
+      });
+
+      /* النص العربي: نضمن الاتجاه والخط */
+      css.push('direction:rtl');
+      if (target.tagName === 'H1' || target.tagName === 'H2') css.push('font-weight:bold');
+
+      if (css.length) target.setAttribute('style', css.join(';'));
+
+      /* نُنزل في الشجرة بمقارنة المواضع */
+      const sChildren = source.children, tChildren = target.children;
+      const n = Math.min(sChildren.length, tChildren.length);
+      for (let i = 0; i < n; i++) inlineStyles(sChildren[i], tChildren[i]);
+    } catch (e) { /* الأنماط تحسين لا أكثر — نتجاهل أي عطل */ }
+  }
+
+  /**
+   * يبني نسخة من الجزء المطلوب بأنماط مضمَّنة.
+   * @returns {{html:string, text:string}|null}
+   */
+  function buildStyledCopy(area, mode) {
+    const fragment = buildCopyFragment(area, mode);
+    if (!fragment) return null;
+
+    /* نُنسخ الأنماط من العناصر الأصلية إلى الشجرة المنسوخة.
+       النوعان مختلفان (div للنسخ مقابل #docPreview الأصلي)، فنمرّر
+       العنصر الأصلي كجذر للمقارنة. */
+    const sourceRoot = (mode === 'recommendations')
+      ? recSectionSource(area)
+      : area;
+
+    if (sourceRoot) {
+      /* نُنسخ أنماط الجذر ثم أبنائه */
+      inlineStyles(sourceRoot, fragment);
+    }
+
+    /* -----------------------------------------------------------------
+       تثبيت تنسيق فاصل المحور صراحةً.
+       -----------------------------------------------------------------
+       الاعتماد على الأنماط المحسوبة وحدها لا يكفي هنا: فقاعدة
+       `.doc h2.axis` قد لا تُحسب كما نتوقّع، فيُنسخ الفاصل بمحاذاة
+       اليمين بدل الوسط. نُثبّتها مباشرةً على العنصر — والنتيجة مضمونة.
+       ----------------------------------------------------------------- */
+    try {
+      const axisEls = fragment.querySelectorAll
+        ? fragment.querySelectorAll('h2.axis') : [];
+      Array.prototype.forEach.call(axisEls, el => {
+        const cur = el.getAttribute('style') || '';
+        el.setAttribute('style',
+          cur + ';text-align:center;border-bottom:0;font-weight:bold;direction:rtl');
+      });
+    } catch (e) { /* تحسين لا أكثر */ }
+
+    return {
+      html: fragment.outerHTML,
+      text: (fragment.innerText || fragment.textContent || '').trim(),
+    };
+  }
+
+  /** يجد قسم التوصيات في المعاينة الأصلية (لمطابقة الشجرة المنسوخة) */
+  function recSectionSource(area) {
+    try {
+      const h = Array.from(area.querySelectorAll('h2'))
+        .find(x => x.textContent.trim() === 'التوصيات');
+      return h ? h.parentElement : area;
+    } catch (e) { return area; }
+  }
+
+
   function fallbackCopy(html, text, successMessage = 'نُسخ التقرير بتنسيقه ✓') {
     let holder;
     try {
