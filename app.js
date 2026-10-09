@@ -1158,8 +1158,44 @@ function bindButtons() {
   bindOn('#btnWord', () => ADMHReport.run('تصدير Word', ADMHReport.exportWord));
   bindOn('#btnWord2', () => ADMHReport.run('تصدير Word', ADMHReport.exportWord));
   bindOn('#btnPreviewGo', () => showView('preview'));
-  /* نسخ التقرير بالكامل بتنسيقه إلى الحافظة */
-  bindOn('#btnCopy', () => { showView('preview'); setTimeout(() => ADMHReport.run('النسخ', ADMHReport.copyReport), 60); });
+  /* قائمة خيارات نسخ التقرير */
+  bindOn('#btnCopy', (event) => {
+    event.preventDefault();
+    const menu = $('#copyMenu');
+    if (!menu) {
+      showView('preview');
+      setTimeout(() => ADMHReport.run('النسخ', () => ADMHReport.copyReport('all')), 60);
+      return;
+    }
+    const isOpen = menu.classList.toggle('open');
+    $('#btnCopy').setAttribute('aria-expanded', String(isOpen));
+  });
+
+  document.querySelectorAll('#copyMenuList [data-copy-mode]').forEach(button => {
+    button.addEventListener('click', () => {
+      const mode = button.getAttribute('data-copy-mode') || 'all';
+      const menu = $('#copyMenu');
+      if (menu) menu.classList.remove('open');
+      $('#btnCopy')?.setAttribute('aria-expanded', 'false');
+      ADMHReport.run('النسخ', () => ADMHReport.copyReport(mode));
+    });
+  });
+
+  document.addEventListener('click', event => {
+    const menu = $('#copyMenu');
+    if (menu && !menu.contains(event.target)) {
+      menu.classList.remove('open');
+      $('#btnCopy')?.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      const menu = $('#copyMenu');
+      if (menu) menu.classList.remove('open');
+      $('#btnCopy')?.setAttribute('aria-expanded', 'false');
+    }
+  });
 
   /* الطباعة: تُفوَّض إلى report-print.js */
   bindOn('#btnPrint', () => { showView('preview'); setTimeout(() => ADMHReport.run('الطباعة', ADMHReport.printReport), 120); });
@@ -2173,7 +2209,7 @@ const PALETTE = [
   { t: 'تقرير جديد', k: 'new', run: () => $('#btnNew').click() },
   { t: 'تصدير Word (.docx)', k: 'word', run: () => exportWord() },
   { t: 'معاينة التقرير', k: 'preview', run: () => showView('preview') },
-  { t: 'نسخ التقرير بتنسيقه', k: 'copy', run: () => { showView('preview'); setTimeout(() => ADMHReport.run('النسخ', ADMHReport.copyReport), 60); } },
+  { t: 'نسخ التقرير بتنسيقه', k: 'copy', run: () => { showView('preview'); setTimeout(() => { const menu = $('#copyMenu'); if (menu) { menu.classList.add('open'); $('#btnCopy')?.setAttribute('aria-expanded', 'true'); } else ADMHReport.run('النسخ', () => ADMHReport.copyReport('all')); }, 60); } },
   { t: 'طباعة', k: 'print', run: () => { showView('preview'); setTimeout(() => ADMHReport.run('الطباعة', ADMHReport.printReport), 120); } },
   { t: 'حفظ في الأرشيف', k: 'save', run: () => saveToArchive() },
   { t: 'إضافة كل السجلات المعتادة', k: 'records', run: () => $('#btnAllRecords').click() },
