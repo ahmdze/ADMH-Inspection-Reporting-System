@@ -59,9 +59,10 @@ function __modesTest() {
     (async function () {
       /* العلامات تُشتق من عناصر المعاينة نفسها — فاسم المؤسسة يظهر في
          الترويسة وفي المقدمة معاً، فلا يصلح علامةً للترويسة. */
+      /* الترويسة تُبنى الآن من النموذج (صيغة Word)، فالعلامة اسم المؤسسة */
       var hdrEl = area.querySelector('.hdr');
-      var MARK_HEADER = (hdrEl ? hdrEl.textContent : '').trim().slice(0, 40);
-      check('header element exists in preview', !!hdrEl && MARK_HEADER.length > 5, MARK_HEADER);
+      check('header element exists in preview', !!hdrEl, hdrEl && hdrEl.className);
+      var MARK_HEADER = 'الخناسة';
       var MARK_RECS = 'تشكيل لجنة تحقيقية';
       var MARK_STAFF = 'الملاك الكلي';
 

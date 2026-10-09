@@ -22,22 +22,33 @@ window.ADMHReport = window.ADMHReport || {};
   /* =========================================================================
      بناء نص عادي من النموذج — يُستخدم كخطة بديلة وللنسخ البسيط
      ========================================================================= */
-  function buildPlainText(M) {
+  function buildPlainText(M, mode = 'all') {
     const out = [];                                     /* مصفوفة الأسطر */
     const add = s => { if (s !== undefined && s !== null && String(s).trim()) out.push(String(s)); };
     const blank = () => { if (out.length && out[out.length - 1] !== '') out.push(''); };
 
-    add(M.title);                                       /* عنوان التقرير */
-    add('='.repeat(Math.min(60, (M.title || '').length + 4))); /* خط تحت العنوان */
-    blank();
+    /* الأوضاع: all · without-header · without-header-recs · recommendations */
+    const withHeader = (mode === 'all');
+    const onlyRecs = (mode === 'recommendations');
+    const skipRecs = (mode === 'without-header-recs');
+    const REC = 'التوصيات';
 
-    (M.meta || []).forEach(m => add(m[0] + ': ' + m[1])); /* البيانات العلوية */
-    blank();
-
-    add(M.intro);                                       /* المقدمة */
-    blank();
+    if (withHeader) {
+      add(M.title);                                     /* عنوان التقرير */
+      add('='.repeat(Math.min(60, (M.title || '').length + 4)));
+      blank();
+      (M.meta || []).forEach(m => add(m[0] + ': ' + m[1]));  /* البيانات العلوية */
+      blank();
+      add(M.intro);                                     /* المقدمة */
+      blank();
+    }
 
     (M.sections || []).forEach(s => {                   /* كل قسم من أقسام التقرير */
+      const isRec = (s.heading === REC) || (s.type === 'recs');
+
+      if (onlyRecs && !isRec) return;                   /* التوصيات فقط */
+      if (skipRecs && isRec) return;                    /* دون التوصيات */
+
       /* فاصل المحور: «المحور الإداري //» — سطر مستقل بلا خط تحته */
       if (s.type === 'axis') {
         blank();
@@ -71,7 +82,8 @@ window.ADMHReport = window.ADMHReport || {};
       blank();
     });
 
-    if ((M.signers || []).length) {                      /* فريق التفتيش */
+    /* فريق التفتيش — يُستثنى في «التوصيات فقط» */
+    if (!onlyRecs && (M.signers || []).length) {
       add('فريق التفتيش');
       M.signers.forEach(s => {
         add(s.name || '—');
@@ -80,7 +92,7 @@ window.ADMHReport = window.ADMHReport || {};
         blank();
       });
     }
-    if (M.footerNote) add(M.footerNote);                 /* ملاحظة أسفل التقرير */
+    if (!onlyRecs && M.footerNote) add(M.footerNote);
     return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
@@ -95,45 +107,10 @@ window.ADMHReport = window.ADMHReport || {};
     recommendations: { label: 'التوصيات فقط', success: 'تم نسخ التوصيات بتنسيقها ✓' },
   };
 
-  /* يعزل الجزء المطلوب من المعاينة دون تعديل التقرير الأصلي. */
-  function buildCopyFragment(area, mode) {
-    const clone = area.cloneNode(true);
-    clone.removeAttribute('id');
-
-    const headings = Array.from(clone.querySelectorAll('h2'));
-    const recHeading = headings.find(h => h.textContent.trim() === 'التوصيات');
-
-    if (mode === 'without-header' || mode === 'without-header-recs') {
-      clone.querySelectorAll('.hdr').forEach(el => el.remove());
-    }
-
-    if (mode === 'without-header-recs') {
-      if (recHeading) {
-        let node = recHeading;
-        while (node) {
-          const next = node.nextElementSibling;
-          node.remove();
-          if (!next || next.tagName === 'H2') break;
-          node = next;
-        }
-      }
-    } else if (mode === 'recommendations') {
-      if (!recHeading) return null;
-      const onlyRecs = document.createElement('div');
-      onlyRecs.className = clone.className;
-      onlyRecs.setAttribute('dir', 'rtl');
-      let node = recHeading;
-      while (node && (node.tagName !== 'H2' || node === recHeading)) {
-        const next = node.nextElementSibling;
-        onlyRecs.appendChild(node.cloneNode(true));
-        if (!next || next.tagName === 'H2') break;
-        node = next;
-      }
-      return onlyRecs;
-    }
-
-    return clone;
-  }
+  /* ملاحظة: أُزيل buildCopyFragment القديم.
+     كان يقصّ شجرة المعاينة كـ HTML بأصناف CSS — وWord يتجاهلها فيُلصق
+     النص عارياً. الآن يُبنى المنسوخ من نموذج التقرير مباشرةً بصيغة Word
+     (انظر buildWordHtml و buildPlainText أدناه). */
 
   function copyReport(mode = 'all') {
     const area = $('#docPreview');
@@ -141,16 +118,31 @@ window.ADMHReport = window.ADMHReport || {};
 
     const selectedMode = COPY_MODES[mode] ? mode : 'all';
 
-    /* نبني نسخة **بأنماط مضمَّنة** لتحمل التنسيق معها أينما لُصقت.
-       بلا هذا، يكون المنسوخ أصنافاً فقط ولا CSS خارج الموقع لتُطبّقها. */
-    const built = buildStyledCopy(area, selectedMode);
-    if (!built || !built.html.trim() || !built.text) {
-      NS.toast(selectedMode === 'recommendations' ? 'لا توجد توصيات لنسخها' : 'لا توجد معلومات لنسخها', 'warn');
+    /* -----------------------------------------------------------------
+       نبني HTML بصيغة Word من **نموذج التقرير** مباشرةً.
+       -----------------------------------------------------------------
+       لماذا لا من شجرة المعاينة؟ لأن Word يتجاهل أنماط CSS المحسوبة
+       (بكسلات وأصناف)، فيُلصق النص عارياً — وهذا ما كان يحدث.
+       الوسوم الدلالية والأنماط بصيغة Word (pt) هي ما يفهمه.
+       ----------------------------------------------------------------- */
+    let M = null;
+    try {
+      M = NS.buildModel();
+    } catch (e) {
+      NS.toast('تعذّر بناء التقرير للنسخ: ' + (e && e.message), 'err');
       return;
     }
 
-    const html = built.html;
-    const text = built.text;
+    const html = buildWordHtml(M, selectedMode);
+
+    /* نص عادي كخطة بديلة: سطور بسيطة بلا وسوم (لِما لا يدعم HTML) */
+    const text = buildPlainText(M, selectedMode);
+
+    /* نتحقق أن الوضع أنتج محتوى فعلاً */
+    if (!html || html.length < 80 || !text) {
+      NS.toast(selectedMode === 'recommendations' ? 'لا توجد توصيات لنسخها' : 'لا توجد معلومات لنسخها', 'warn');
+      return;
+    }
     const successMessage = COPY_MODES[selectedMode].success;
 
     /* نسخ HTML ونص عادي معاً للحفاظ على التنسيق عند اللصق في Word. */
@@ -170,116 +162,156 @@ window.ADMHReport = window.ADMHReport || {};
   }
 
   /* =========================================================================
-     تنسيق مضمَّن قبل النسخ
+     بناء HTML متوافق مع Word
      =========================================================================
-     سبب المشكلة: ما نُسخه سابقاً كان **أصنافاً** فقط (class="doc"، <h2>)
-     بلا أي أنماط. وعند اللصق خارج الموقع (Word، البريد، محرّر نصوص) لا يوجد
-     ملف CSS ليُطبّقها — فيظهر النص مجرّداً بلا تنسيق.
+     سبب فشل التنسيق سابقاً: كنا ننسخ أنماط CSS المحسوبة من المعاينة
+     (بكسلات، أصناف، خصائص حديثة). و**Word يتجاهل معظم CSS عند اللصق**،
+     فلا يُبقي إلا النص. والدليل من ملف النتيجة: صفر عريض، صفر ألوان،
+     صفر أحجام — فقرات نصّية بحتة.
 
-     الحل: ننسخ **الأنماط المحسوبة** من المعاينة ونكتبها مضمَّنة في كل عنصر،
-     فيحمل النص المنسوخ تنسيقه معه أينما لُصق.
+     ما يفهمه Word فعلاً:
+       · وسوم دلالية: <b> <strong> <h1> <h2> <p>
+       · أنماط بصيغة Word: font-size:12.0pt · color:#004D40 · text-align
+       · attr dir="rtl" للمحتوى العربي
+
+     لذلك نبني HTML **من نموذج التقرير مباشرةً** بوسوم دلالية وأنماط
+     بصيغة Word — لا من شجرة المعاينة. والنتيجة: التنسيق نفسه الذي ينتجه
+     «تصدير وورد»، لكن عبر الحافظة.
      ========================================================================= */
-  const STYLE_PROPS = [
-    'fontWeight', 'fontStyle', 'textDecoration', 'fontSize', 'fontFamily',
-    'color', 'backgroundColor', 'textAlign', 'direction',
-    'marginTop', 'marginBottom', 'paddingTop', 'paddingBottom',
-    'borderBottom', 'borderTop', 'letterSpacing', 'lineHeight',
-  ];
+  const WFONT = "Traditional Arabic, 'Segoe UI', Tahoma, sans-serif";
 
-  /**
-   * يكتب الأنماط المحسوبة مضمَّنة في عناصر الشجرة.
-   * @param {Element} source العنصر الأصلي في المعاينة
-   * @param {Element} target العنصر المقابل في الشجرة المنسوخة
-   */
-  function inlineStyles(source, target) {
-    if (!source || !target) return;
-    try {
-      const cs = window.getComputedStyle(source);
-      const css = [];
+  /** تأمين النص لـ HTML */
+  function hEsc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
 
-      STYLE_PROPS.forEach(prop => {
-        const v = cs[prop];
-        if (!v || v === 'normal' || v === 'auto' || v === 'none') return;
-        /* نتجاهل الافتراضيات الطويلة بلا داعٍ */
-        if (prop === 'fontFamily') {
-          const first = String(v).split(',')[0].replace(/["']/g, '').trim();
-          if (!first) return;
-          css.push('font-family:' + first);
-          return;
-        }
-        /* حدود سفلية صفرية لا داعي لها */
-        if ((prop === 'borderBottom' || prop === 'borderTop') &&
-            /0px|none/.test(String(v))) return;
-        /* ألوان الخلفية الشفافة تُهمَل */
-        if (prop === 'backgroundColor' &&
-            /rgba?\(0,\s*0,\s*0,\s*0\)|transparent/.test(String(v))) return;
-        const kebab = prop.replace(/[A-Z]/g, m => '-' + m.toLowerCase());
-        css.push(kebab + ':' + v);
-      });
+  /** فقرة بصيغة Word */
+  function wP(text, o) {
+    o = o || {};
+    const st = [
+      'margin:0 0 ' + (o.after == null ? 6 : o.after) + 'pt 0',
+      'font-family:' + WFONT,
+      'font-size:' + (o.pt || 12) + 'pt',
+      'line-height:1.15',
+      'color:' + (o.color || '#000000'),
+      'text-align:' + (o.align || 'right'),
+      'direction:rtl',
+    ];
+    if (o.bold) st.push('font-weight:bold');
+    if (o.indent) st.push('margin-right:' + o.indent + 'pt');
+    return '<p dir="rtl" style="' + st.join(';') + '">' + text + '</p>';
+  }
 
-      /* النص العربي: نضمن الاتجاه والخط */
-      css.push('direction:rtl');
-      if (target.tagName === 'H1' || target.tagName === 'H2') css.push('font-weight:bold');
+  /** عنوان قسم بصيغة Word — حجم أكبر ولون التقرير */
+  function wHeading(text, o) {
+    o = o || {};
+    return wP('<b>' + text + '</b>', {
+      pt: o.pt || 14,
+      bold: true,
+      color: o.color || '#004D40',
+      align: o.align || 'right',
+      after: o.after == null ? 8 : o.after,
+      indent: o.indent,
+    });
+  }
 
-      if (css.length) target.setAttribute('style', css.join(';'));
-
-      /* نُنزل في الشجرة بمقارنة المواضع */
-      const sChildren = source.children, tChildren = target.children;
-      const n = Math.min(sChildren.length, tChildren.length);
-      for (let i = 0; i < n; i++) inlineStyles(sChildren[i], tChildren[i]);
-    } catch (e) { /* الأنماط تحسين لا أكثر — نتجاهل أي عطل */ }
+  /** بند مرقّم أو منقّط */
+  function wItem(marker, text, indent) {
+    const pad = indent == null ? 18 : indent;
+    return '<p dir="rtl" style="margin:0 0 4pt 0;font-family:' + WFONT +
+      ';font-size:12.0pt;line-height:1.15;color:#000000;text-align:right;direction:rtl;' +
+      'margin-right:' + pad + 'pt;text-indent:-' + pad + 'pt">' +
+      marker + '&nbsp;' + text + '</p>';
   }
 
   /**
-   * يبني نسخة من الجزء المطلوب بأنماط مضمَّنة.
-   * @returns {{html:string, text:string}|null}
+   * يبني HTML التقرير بصيغة Word.
+   * @param {object} M نموذج التقرير
+   * @param {string} mode وضع النسخ
    */
-  function buildStyledCopy(area, mode) {
-    const fragment = buildCopyFragment(area, mode);
-    if (!fragment) return null;
+  function buildWordHtml(M, mode) {
+    const out = [];
+    const REC_HEADING = 'التوصيات';
+    const withHeader = (mode === 'all');
+    const onlyRecs = (mode === 'recommendations');
+    const skipRecs = (mode === 'without-header-recs');
 
-    /* نُنسخ الأنماط من العناصر الأصلية إلى الشجرة المنسوخة.
-       النوعان مختلفان (div للنسخ مقابل #docPreview الأصلي)، فنمرّر
-       العنصر الأصلي كجذر للمقارنة. */
-    const sourceRoot = (mode === 'recommendations')
-      ? recSectionSource(area)
-      : area;
+    out.push('<div dir="rtl" lang="ar" style="font-family:' + WFONT +
+      ';font-size:12.0pt;direction:rtl;text-align:right">');
 
-    if (sourceRoot) {
-      /* نُنسخ أنماط الجذر ثم أبنائه */
-      inlineStyles(sourceRoot, fragment);
+    /* ---------- الترويسة: العنوان والبيانات العلوية ---------- */
+    if (withHeader) {
+      const hdr = [];
+      [M.header && M.header.l1, M.header && M.header.l2, M.header && M.header.l3]
+        .filter(Boolean).forEach(l => hdr.push(wP(hEsc(l), { pt: 11, color: '#555555', align: 'center', after: 2 })));
+      if (M.title) hdr.push(wP('<b>' + hEsc(M.title) + '</b>', { pt: 16, bold: true, color: '#004D40', align: 'center', after: 6 }));
+      if ((M.meta || []).length) {
+        hdr.push(wP(M.meta.map(m => '<b>' + hEsc(m[0]) + ':</b> ' + hEsc(m[1])).join(' &nbsp;|&nbsp; '),
+          { pt: 11, color: '#444444', align: 'center', after: 10 }));
+      }
+      out.push(hdr.join(''));
+      /* المقدمة جزء من الترويسة (تأتي قبل الأقسام) */
+      if (M.intro) out.push(wP(hEsc(M.intro), { pt: 12, align: 'justify', after: 10 }));
     }
 
-    /* -----------------------------------------------------------------
-       تثبيت تنسيق فاصل المحور صراحةً.
-       -----------------------------------------------------------------
-       الاعتماد على الأنماط المحسوبة وحدها لا يكفي هنا: فقاعدة
-       `.doc h2.axis` قد لا تُحسب كما نتوقّع، فيُنسخ الفاصل بمحاذاة
-       اليمين بدل الوسط. نُثبّتها مباشرةً على العنصر — والنتيجة مضمونة.
-       ----------------------------------------------------------------- */
-    try {
-      const axisEls = fragment.querySelectorAll
-        ? fragment.querySelectorAll('h2.axis') : [];
-      Array.prototype.forEach.call(axisEls, el => {
-        const cur = el.getAttribute('style') || '';
-        el.setAttribute('style',
-          cur + ';text-align:center;border-bottom:0;font-weight:bold;direction:rtl');
+    /* ---------- الأقسام ---------- */
+    (M.sections || []).forEach(s => {
+      const isRec = (s.heading === REC_HEADING) || (s.type === 'recs');
+
+      /* فاصل المحور: مميّز، بلا خط، وسط الصفحة */
+      if (s.type === 'axis') {
+        out.push(wHeading(hEsc(s.heading), { pt: 15, align: 'center', after: 12 }));
+        return;
+      }
+      if (onlyRecs && !isRec) return;          /* التوصيات فقط */
+      if (skipRecs && isRec) return;           /* دون التوصيات */
+
+      out.push(wHeading(hEsc(s.heading)));
+
+      if (s.type === 'kv') {
+        (s.rows || []).forEach(r => out.push(
+          wP((r[0] ? '<b>' + hEsc(r[0]) + ':</b> ' : '') + hEsc(r[1]), { after: 3 })));
+        (s.notes || []).forEach(n => out.push(wP(hEsc(n), { after: 3 })));
+      } else if (s.type === 'list') {
+        s.items.forEach((it, i) => out.push(
+          s.numbered === false
+            ? wP(hEsc(it), { after: 3 })
+            : wItem((i + 1) + '-', hEsc(it))));
+      } else if (s.type === 'positions') {
+        s.blocks.forEach(b => {
+          if (b.intro) out.push(wP(hEsc(b.intro), { after: 4 }));
+          b.cats.forEach(c => {
+            out.push(wP('<b>' + hEsc(c.title) + ':</b>', { after: 3 }));
+            c.items.forEach(it => out.push(wItem('•', hEsc(it), 26)));
+          });
+        });
+      } else if (s.type === 'recs') {
+        s.groups.forEach(g => {
+          const lbl = [g.letter ? g.letter + '/' : '', g.intro || g.label].filter(Boolean).join(' ');
+          if (lbl) out.push(wP('<b>' + hEsc(lbl.replace(/\/\s*$/, '/')) + '</b>', { bold: true, after: 4 }));
+          g.items.forEach((it, i) => out.push(wItem((i + 1) + '-', hEsc(it))));
+        });
+      }
+    });
+
+    /* ---------- فريق التفتيش (يُستثنى في «التوصيات فقط») ---------- */
+    if (!onlyRecs && (M.signers || []).length) {
+      out.push(wHeading('فريق التفتيش'));
+      M.signers.forEach(s => {
+        out.push(wP('<b>' + hEsc(s.name || '—') + '</b>', { after: 2 }));
+        const sub = [s.job, s.date].filter(Boolean).join(' — ');
+        if (sub) out.push(wP(hEsc(sub), { pt: 11, color: '#555555', after: 2 }));
+        out.push(wP('التوقيع: ..................................', { pt: 11, color: '#444444', after: 10 }));
       });
-    } catch (e) { /* تحسين لا أكثر */ }
+    }
+    if (!onlyRecs && M.footerNote) {
+      out.push(wP(hEsc(M.footerNote), { pt: 11, color: '#555555', align: 'center', after: 4 }));
+    }
 
-    return {
-      html: fragment.outerHTML,
-      text: (fragment.innerText || fragment.textContent || '').trim(),
-    };
-  }
-
-  /** يجد قسم التوصيات في المعاينة الأصلية (لمطابقة الشجرة المنسوخة) */
-  function recSectionSource(area) {
-    try {
-      const h = Array.from(area.querySelectorAll('h2'))
-        .find(x => x.textContent.trim() === 'التوصيات');
-      return h ? h.parentElement : area;
-    } catch (e) { return area; }
+    out.push('</div>');
+    return out.join('');
   }
 
 

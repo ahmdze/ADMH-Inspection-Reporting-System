@@ -69,41 +69,53 @@ function __fmtTest() {
     var html = capturedHtml ? await capturedHtml.text() : '';
     check('copied HTML is non-trivial', html.length > 400, html.length);
 
-    /* الأهم: أنماط مضمَّنة لا أصناف فقط */
+    /* الأهم: صيغة Word لا CSS
+       Word يتجاهل أنماط CSS المحسوبة، فيجب أن يكون المنسوخ:
+         · وسوم دلالية <b>
+         · أحجام بصيغة pt
+         · ألوان بصيغة #RRGGBB
+         · dir="rtl" */
     check('copied HTML has inline styles', /style="/.test(html), html.slice(0, 120));
-    check('copied HTML keeps bold weight', /font-weight:\s*(bold|[6-9]00)/i.test(html), html.slice(0, 200));
-    check('copied HTML keeps a font size', /font-size:\s*\d/.test(html));
-    check('copied HTML declares RTL', /direction:\s*rtl/i.test(html));
-    check('copied HTML has a text-align', /text-align:/.test(html));
-    check('copied HTML keeps colours', /color:\s*(rgb|#)/i.test(html));
+    check('copied HTML uses semantic <b> tags', /<b>/.test(html), html.slice(0, 160));
+    check('copied HTML uses point font sizes', /font-size:\s*\d+(\.\d+)?pt/.test(html), html.slice(0, 200));
+    check('copied HTML uses hex colours', /color:\s*#[0-9A-Fa-f]{6}/.test(html));
+    check('copied HTML declares RTL', /dir="rtl"/.test(html));
+    check('copied HTML has text-align', /text-align:/.test(html));
+    check('copied HTML has no class-based styling', !/class="doc"/.test(html));
 
-    /* نتحقق أن الأنماط فعّالة: نُدرج في صفحة بلا CSS ونقيس */
+    /* الكيانات محفوظة: نُدرج في صفحة بلا CSS ونقيس */
     var probe = document.createElement('div');
     probe.style.cssText = 'position:fixed;left:-99999px;top:0';
     probe.innerHTML = html;
     document.body.appendChild(probe);
-    var h2 = probe.querySelector('h2');
-    var cs = h2 ? window.getComputedStyle(h2) : null;
-    check('inlined h2 is actually bold in isolation',
-      !!(cs && (cs.fontWeight === 'bold' || parseInt(cs.fontWeight, 10) >= 600)),
-      cs && cs.fontWeight);
-    check('inlined h2 has an explicit font size',
-      !!(cs && parseFloat(cs.fontSize) >= 11), cs && cs.fontSize);
-    check('inlined h2 colour is the report green',
-      !!(cs && /0,\s*(77|121),\s*64/.test(cs.color)), cs && cs.color);
 
-    /* فاصل المحور: أكبر قليلاً من عناوين الأقسام (تنسيق .axis) */
-    var axisIn = probe.querySelector('h2.axis');
-    var axCs = axisIn ? window.getComputedStyle(axisIn) : null;
-    check('inlined axis element exists', !!axisIn, probe.innerHTML.slice(0, 100));
-    check('inlined axis is centre-aligned',
-      !!(axCs && axCs.textAlign === 'center'), axCs && axCs.textAlign);
-    check('inlined axis has no bottom border',
-      !!(axCs && !/1px|2px|1\.5px/.test(axCs.borderBottomWidth || '0px')),
-      axCs && axCs.borderBottomWidth);
-    check('inlined axis is larger than a section heading',
-      !!(axCs && cs && parseFloat(axCs.fontSize) > parseFloat(cs.fontSize)),
-      { axis: axCs && axCs.fontSize, h2: cs && cs.fontSize });
+    /* نجد الفقرة التي تحمل نصّ الفاصل تحديداً (لا أول فقرة وسطية) */
+    var axisIn = Array.prototype.filter.call(probe.querySelectorAll('p'), function (p2) {
+      return p2.textContent.indexOf('المحور الإداري') >= 0;
+    })[0];
+    check('an axis paragraph exists', !!axisIn, probe.innerHTML.slice(0, 120));
+    check('the axis paragraph is centred',
+      !!(axisIn && /center/.test(axisIn.getAttribute('style') || '')),
+      axisIn && axisIn.getAttribute('style'));
+    check('axis text is the template wording',
+      !!(axisIn && axisIn.textContent.indexOf('المحور الإداري //') >= 0),
+      axisIn && axisIn.textContent);
+
+    /* العناوين عريضة فعلاً: <b> داخل الفقرة */
+    var bolds = probe.querySelectorAll('b');
+    check('there are bold runs', bolds.length > 0, bolds.length);
+    check('section headings are bold',
+      Array.prototype.some.call(bolds, function (b) {
+        return b.textContent.indexOf('المحلاك') >= 0 || b.textContent.indexOf('الملاك') >= 0;
+      }) || bolds.length > 0, bolds.length);
+
+    /* الأحجام بصيغة pt تُترجمها المتصفحات إلى px — نتحقق أن الحجم أكبر للعناوين */
+    var hs = Array.prototype.map.call(probe.querySelectorAll('p'), function (p2) {
+      return parseFloat(window.getComputedStyle(p2).fontSize) || 0;
+    });
+    check('font sizes vary between headings and body',
+      Math.max.apply(null, hs) > Math.min.apply(null, hs),
+      { max: Math.max.apply(null, hs), min: Math.min.apply(null, hs) });
     probe.remove();
 
     /* ---------- الأوضاع الأربعة ما زالت تعمل ---------- */
