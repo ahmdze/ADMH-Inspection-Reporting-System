@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '18.0.0';
+const APP_VERSION = '20.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -312,6 +312,71 @@ const state = {
   listKey: 'jobTitles',
 };
 
+/* =============================================================================
+   بيانات وصفية للمزامنة — لكل مجموعة بيانات وقتها الخاص
+   =============================================================================
+   العطل الذي كان يحدث: كان وقت التعديل يُقرأ من `state.settingsUpdatedAt`
+   وهو **غير معرَّف إطلاقاً**، فيُرسل `null` دائماً. فتصير المقارنة
+   `remoteAt > 0` صحيحة دائماً، فيُستبدل المحلي بالسحابي **بصمت** — وتضيع
+   تعديلاتك على مكتبة العبارات والقوائم بلا أي تحذير.
+
+   الحل: ثلاث دقائق منفصلة، كل واحدة تُختم عند تعديلها فعلاً:
+     · settings — خطاب الترويسة والخط والإعدادات
+     · library  — مكتبة العبارات
+     · lists    — القوائم القابلة للتحرير
+   ولا تُختم عند المزامنة نفسها (فالمزامنة ليست تعديلاً).
+   ============================================================================= */
+const LS_SYNCMETA = 'admh.sync.meta.v1';
+
+/** يُنشئ بنية وصفية فارغة */
+function blankSyncMeta() {
+  return { settings: null, library: null, lists: null, synced: {} };
+}
+
+/** يقرأ البيانات الوصفية من التخزين */
+function readSyncMeta() {
+  const raw = jread(LS_SYNCMETA, null);
+  if (!raw || typeof raw !== 'object') return blankSyncMeta();
+  return {
+    settings: raw.settings || null,
+    library: raw.library || null,
+    lists: raw.lists || null,
+    synced: (raw.synced && typeof raw.synced === 'object') ? raw.synced : {},
+  };
+}
+
+/** يكتبها في التخزين */
+function writeSyncMeta(m) {
+  try { localStorage.setItem(LS_SYNCMETA, JSON.stringify(m)); } catch (e) {}
+  return m;
+}
+
+/* عدّاد داخلي: يمنع ختم الوقت مرتين في نفس اللحظة */
+let syncMeta = readSyncMeta();
+
+/**
+ * يختم وقت تعديل مجموعة بيانات.
+ * @param {'settings'|'library'|'lists'} group
+ */
+function stampLocalChange(group) {
+  if (!group) return;
+  syncMeta[group] = new Date().toISOString();
+  writeSyncMeta(syncMeta);
+}
+
+/** وقت آخر تعديل محلي لمجموعة (أو null) */
+function localStamp(group) { return syncMeta[group] || null; }
+
+/** وقت آخر مزامنة ناجحة لمجموعة (أو null) */
+function lastSynced(group) { return (syncMeta.synced && syncMeta.synced[group]) || null; }
+
+/** يسجّل أن مجموعة صارت متزامنة الآن (بلا اعتبارها تعديلاً محلياً) */
+function markSynced(group, at) {
+  syncMeta.synced = syncMeta.synced || {};
+  syncMeta.synced[group] = at || new Date().toISOString();
+  writeSyncMeta(syncMeta);
+}
+
 /* ------------------------------------------------------------------ القوائم
    كل قائمة اختيار مصدرها options.js وقابلة للتعديل من «مكتبة العبارات».
    هذه الأغلفة تمنع تثبيت أي قائمة داخل الكود. */
@@ -399,6 +464,12 @@ function jwrite(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); return true; }
   catch (e) { toast('تعذّر الحفظ — قد تكون مساحة التخزين ممتلئة', 'err', 4000); return false; }
 }
+
+/** كـjwrite لكن بلا إشعار — لمن يريد عرض رسالة أدق بنفسه */
+function jwriteSilent(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); return true; }
+  catch (e) { return false; }
+}
 function loadAll() {
   state.settings = Object.assign(blankSettings(), jread(LS_SETTINGS, {}));
   const lib = jread(LS_LIBRARY, null);
@@ -436,14 +507,34 @@ function saveDraft() {
     /* المؤشر في الشريط العلوي مخصّص لحالة المزامنة، فلا نلمسه هنا. */
   }, 500);
 }
+/**
+ * يحفظ التقرير الحالي في الأرشيف.
+ * -----------------------------------------------------------------------------
+ * عطل حقيقي كان يحدث: كان `jwrite()` يُستدعى وتُتجاهل نتيجتها، ثم تُعرض
+ * رسالة «تم الحفظ في الأرشيف» **حتى لو فشلت الكتابة** (امتلاء مساحة
+ * التخزين مثلاً). فيظن المستخدم أن تقريره محفوظ وهو ليس كذلك.
+ *
+ * الآن: لا رسالة نجاح إلا بعد التحقق من نجاح الكتابة فعلاً.
+ * -----------------------------------------------------------------------------
+ */
 function saveToArchive(silent) {
   const idx = state.reports.findIndex(r => r.id === state.report.id);
   state.report.updatedAt = new Date().toISOString();
   if (idx >= 0) state.reports[idx] = JSON.parse(JSON.stringify(state.report));
   else state.reports.unshift(JSON.parse(JSON.stringify(state.report)));
-  jwrite(LS_REPORTS, state.reports);
+
+  const ok = jwriteSilent(LS_REPORTS, state.reports);
   refreshArchiveMeta();
+
+  if (!ok) {
+    /* فشل التخزين: نُبقي التقرير في الذاكرة ونطلب تصدير نسخة احتياطية */
+    toast('⚠️ تعذّر الحفظ في الأرشيف — مساحة التخزين ممتلئة أو محظورة.\n' +
+          'تقريرك ما زال مفتوحاً ولم يضِع. صدّره الآن كنسخة احتياطية، ' +
+          'ثم احذف تقارير قديمة وفَرّغ مساحة.', 'err', 20000);
+    return false;
+  }
   if (!silent) toast('تم الحفظ في الأرشيف', 'ok');
+  return true;
 }
 
 /* ---------------------------------------------------------------- بناء النموذج */
@@ -1241,6 +1332,11 @@ function bindButtons() {
   bindOn('#newSave', () => newReport(true));      /* احفظ الحالي ثم ابدأ جديداً */
   bindOn('#newDiscard', () => newReport(false));  /* ابدأ جديداً بلا حفظ */
 
+  /* المتابعة: ملف المؤسسات · التوصيات · لوحة المؤشرات */
+  bindFollowUps();
+  /* سحب توصيات المؤسسة من سجل التوصيات إلى هذا التقرير */
+  bindOn('#btnPullPrevRecs', () => pullPreviousRecs());
+
   /* الأرشيف */
   bindOn('#btnExportAll', exportArchiveJSON);
   bindOn('#btnExportAll2', exportArchiveJSON);
@@ -1321,8 +1417,13 @@ function bindButtons() {
     toast('أُرجعت كل القوائم للأصل', 'ok');
   });
 
-  /* إعادة بناء الواجهة عند تغيّر أي قائمة */
-  if (window.ADMHLists) window.ADMHLists.onChange(() => { renderListPicker(); applyListChanges(); });
+  /* إعادة بناء الواجهة عند تغيّر أي قائمة — ونختم الوقت لتعرف المزامنة
+     أن القوائم تغيّرت محلياً (وإلا ضاعت تعديلاتك بصمت). */
+  if (window.ADMHLists) window.ADMHLists.onChange(() => {
+    stampLocalChange('lists');
+    renderListPicker();
+    applyListChanges();
+  });
 
   /* المكتبة: العبارات */
   const lk = $('#libKind');
@@ -1646,6 +1747,7 @@ function saveSettings(silent) {
   state.settings.font = $('#s_font').value;
   state.settings.fontSize = $('#s_fontSize').value;
   state.settings.updatedAt = new Date().toISOString();
+  stampLocalChange('settings');
   jwrite(LS_SETTINGS, state.settings);
   if (!silent) toast('تم حفظ الإعدادات', 'ok');
   updateTitle();
@@ -1940,6 +2042,7 @@ function renderLibraryView() {
     const b = e.target.closest('[data-libdel]'); if (!b) return;
     if (!confirm('حذف هذه العبارة؟')) return;
     state.library[kind].splice(+b.dataset.libdel, 1);
+    stampLocalChange('library');
     jwrite(LS_LIBRARY, state.library);
     renderLibraryView();
   };
@@ -2062,6 +2165,9 @@ function showView(name) {
   if (name === 'preview') ADMHReport.run('المعاينة', ADMHReport.renderPreview);
   if (name === 'archive') renderArchive();
   if (name === 'library') renderLibraryView();
+  if (name === 'facilities') { rebuildRegistry(); renderFacilities(); }
+  if (name === 'recs') { rebuildRegistry(); renderRecs(); }
+  if (name === 'dash') { rebuildRegistry(); renderDash(); }
   if (name === 'settings') {
     fillSettingsForm();
     /* تجهيز مسبق لمكتبة Google: حتى يبقى طلب الدخول داخل تفعيل النقرة،
@@ -2140,7 +2246,10 @@ function renderArchive() {
         state.reports = state.reports.filter(x => x.id !== id);
       }
       jwrite(LS_REPORTS, state.reports);
-      refreshArchiveMeta(); renderArchive(); toast('تم الحذف', 'ok');
+      refreshArchiveMeta();
+  /* التقارير تغيّرت — نُعيد بناء سجل التوصيات وأعداد المتابعة */
+  if (typeof rebuildRegistry === 'function') rebuildRegistry();
+  renderArchive(); toast('تم الحذف', 'ok');
     }
   };
   $('#archStats').textContent = `المعروض: ${list.length} من ${state.reports.length}`;
@@ -2298,9 +2407,20 @@ function initSync() {
   S.init({
     load: () => ({
       reports: state.reports.slice(),
-      settings: Object.assign({}, state.settings, { updatedAt: state.settingsUpdatedAt || null }),
+      /* -----------------------------------------------------------------
+         وقت تعديل حقيقي لكل مجموعة — لا `state.settingsUpdatedAt`
+         (وهو معرّف غير موجود، فكان يُرسل null دائماً فيضيع المحلي بصمت).
+         ----------------------------------------------------------------- */
+      settings: Object.assign({}, state.settings, { updatedAt: localStamp('settings') }),
+      libraryAt: localStamp('library'),
       library: state.library,
+      listsAt: localStamp('lists'),
       lists: (typeof window !== 'undefined' && window.ADMHLists) ? window.ADMHLists.exportAll() : null,
+      /* سجل المؤسسات ودورة حياة التوصيات — يُزامَن مع بقية البيانات */
+      registryAt: localStamp('registry'),
+      registry: readRegistry(),
+      /* أوقات آخر مزامنة — تميّز «الجديد عند الطرفين» من «الجديد عند طرف واحد» */
+      synced: Object.assign({}, syncMeta.synced || {}),
     }),
     save: payload => {
       if (Array.isArray(payload.reports)) {
@@ -2315,11 +2435,13 @@ function initSync() {
         delete incoming.updatedAt;
         state.settings = Object.assign(blankSettings(), incoming);
         state.logo = state.settings.logo || '';
-        jwrite(LS_SETTINGS, state.settings);
+        /* نكتب بصمت: فشل الكتابة هنا لا يجب أن يُشوّش، لكن **يكفي لنزيل
+           الادّعاء بأن الإعدادات محفوظة محلياً**. */
+        jwriteSilent(LS_SETTINGS, state.settings);
       }
       if (payload.library && typeof payload.library === 'object') {
         ['records', 'reco', 'general'].forEach(k => { if (Array.isArray(payload.library[k])) state.library[k] = payload.library[k]; });
-        jwrite(LS_LIBRARY, state.library);
+        jwriteSilent(LS_LIBRARY, state.library);
       }
       if (payload.lists && typeof payload.lists === 'object' && window.ADMHLists) {
         if (window.ADMHLists.importAll(payload.lists)) {
@@ -2329,9 +2451,35 @@ function initSync() {
           applyListChanges();
         }
       }
+      /* سجل المؤسسات: نأخذه كما هو من الدمج ثم نُعيد بناء التوصيات من التقارير */
+      if (payload.registry && typeof payload.registry === 'object') {
+        const R2 = REG();
+        if (R2) {
+          registryCache = R2.normalizeRegistry(payload.registry);
+          jwriteSilent(LS_REGISTRY, registryCache);
+          registryCache.recs = R2.buildRecs(state.reports, registryCache);
+          jwriteSilent(LS_REGISTRY, registryCache);
+          updateFollowCounts();
+        }
+      }
       const st = S.status();
       if (st && st.lastSync) state.lastSyncSync = st.lastSync;
+      /* -----------------------------------------------------------------
+         نُسجّل أن هذه المجموعات صارت متزامنة — وهذا **ليس** تعديلاً محلياً.
+         بلا هذه الخطوة، يُحسب السحابي «جديداً عند الطرفين» في كل مزامنة
+         تالية، فيظهر تعارض وهمي في كل مرة.
+         ----------------------------------------------------------------- */
+      if (payload.synced && typeof payload.synced === 'object') {
+        syncMeta.synced = Object.assign({}, syncMeta.synced || {}, payload.synced);
+        writeSyncMeta(syncMeta);
+      } else {
+        /* توافق مع نسخة سابقة: نعتبر كل شيء متزامناً الآن */
+        ['settings', 'library', 'lists', 'registry'].forEach(g => {
+          if (payload[g]) markSynced(g);
+        });
+      }
       renderSyncUI(S.status());
+      updateFollowCounts();
     },
   });
   sync.ready = true;
@@ -2341,13 +2489,112 @@ function initSync() {
   /* استئناف الجلسة ثم مزامنة صامتة — دون تعطيل الواجهة */
   return S.session().then(connected => {
     renderSyncUI(S.status());
-    if (connected) {
-      return S.syncNow().then(r => {
-        if (r && !r.skipped) toast(`تمت المزامنة (${r.total} تقرير)`, 'ok');
+    if (!connected) return;
+
+    /* =====================================================================
+       حماية البيانات المحلية عند تبديل الحساب
+       =====================================================================
+       المخاطرة: التخزين المحلي مشترك على الجهاز، وليس مقسَّماً بحسب الحساب.
+       فلو سجّل مستخدم آخر الدخول على الجهاز نفسه، لكانت مزامنته ترفع تقارير
+       المستخدم الأول إلى حسابه — وهذا تسريب بيانات بين حسابين.
+
+       الحل: نتذكّر آخر حساب زامنّاه. فإن اختلف الحساب، **لا نُزامن تلقائياً**
+       بل نسأل المستخدم صراحةً. وبلا موافقته تبقى البيانات المحلية كما هي.
+       ===================================================================== */
+    const curUid = (S.status() && S.status().uid) || currentSyncUid();
+    const owner = readLocalOwner();
+
+    if (owner && curUid && owner !== curUid) {
+      /* -----------------------------------------------------------------
+         حساب مختلف عن صاحب البيانات المحلية.
+         إن كان المستخدم قد رفض سابقاً فلا نُعيد السؤال في كل فتح للصفحة —
+         نحترم قراره ونكتفي بتذكيره.
+         ----------------------------------------------------------------- */
+      if (ownerRefused(curUid)) {
+        toast('البيانات المحلية تخصّ حساباً آخر ولم تُرفع إليه', 'warn', 6000);
         renderSyncUI(S.status());
-      }).catch(() => renderSyncUI(S.status()));
+        return;
+      }
+
+      const pushIt = confirm(
+        'البيانات المحلية على هذا الجهاز تعود إلى حساب آخر.\n\n' +
+        'سؤال مهم قبل المزامنة:\n' +
+        'هل تريد رفع التقارير المحلية إلى الحساب الجديد؟\n\n' +
+        '· «موافق» = تُرفع البيانات المحلية إلى الحساب الجديد.\n' +
+        '· «إلغاء» = تبقى محلية كما هي، ولن تُرفع (الأأمن).');
+      if (pushIt) {
+        markLocalOwner(curUid);
+        return S.syncNow().then(r => {
+          if (r && !r.skipped) toast(`تمت المزامنة (${r.total} تقرير)`, 'ok');
+          renderSyncUI(S.status());
+        }).catch(() => renderSyncUI(S.status()));
+      }
+      /* رفض الرفع: نُبقي البيانات محلية ولا نزامن، ونتذكّر القرار */
+      markLocalOwner(curUid, true);
+      toast('لم تُرفع البيانات المحلية إلى الحساب الجديد — بقيت محلية', 'warn', 8000);
+      renderSyncUI(S.status());
+      return;
     }
+
+    /* الحساب نفسه (أو أول مرة): نزامن عادةً */
+    if (!owner) markLocalOwner(curUid);
+    return S.syncNow().then(r => {
+      if (r && !r.skipped) toast(`تمت المزامنة (${r.total} تقرير)`, 'ok');
+      renderSyncUI(S.status());
+    }).catch(() => renderSyncUI(S.status()));
   }).catch(() => { renderSyncUI(S.status()); });
+}
+
+/* =============================================================================
+   ملكية البيانات المحلية
+   =============================================================================
+   نتذكّر أي حساب يملك البيانات المحلية على هذا الجهاز، حتى لا تنتقل تقارير
+   مستخدم إلى حساب مستخدم آخر عند تبديل الحساب.
+   ============================================================================= */
+const LS_LOCAL_OWNER = 'admh.local.owner.v1';
+
+/** آخر حساب زامنّاه على هذا الجهاز (أو null) */
+function readLocalOwner() {
+  try {
+    const raw = localStorage.getItem(LS_LOCAL_OWNER);
+    if (!raw) return null;
+    /* الشكل القديم كان نصاً مجرّداً — نقبله أيضاً */
+    if (raw.charAt(0) !== '{') return raw;
+    const o = JSON.parse(raw);
+    return (o && o.uid) || null;
+  } catch (e) { return null; }
+}
+
+/** هل رفض المستخدم رفع بياناته إلى هذا الحساب؟ */
+function ownerRefused(uid) {
+  try {
+    const o = JSON.parse(localStorage.getItem(LS_LOCAL_OWNER) || '{}');
+    return !!(o && o.refused && o.uid === uid);
+  } catch (e) { return false; }
+}
+
+/**
+ * يسجّل صاحب البيانات المحلية.
+ * @param {string} uid
+ * @param {boolean} [refused] المستخدم رفض رفع بياناته إلى هذا الحساب
+ */
+function markLocalOwner(uid, refused) {
+  try {
+    localStorage.setItem(LS_LOCAL_OWNER, JSON.stringify({
+      uid: uid || '', refused: !!refused, at: new Date().toISOString(),
+    }));
+  } catch (e) {}
+}
+
+/** uid الحساب الحالي من وحدة المزامنة (إن وُجد) */
+function currentSyncUid() {
+  try {
+    const S = sync.available() ? sync.get() : null;
+    if (!S) return '';
+    const st = S.status();
+    /* نُفضّل uid الحقيقي — فالبريد قد يتغيّر أو يتكرّر */
+    return (st && (st.uid || st.email)) || '';
+  } catch (e) { return ''; }
 }
 
 function renderSyncUI(st) {
@@ -2443,7 +2690,12 @@ function syncNow(userInitiated) {
     }
     return S.syncNow().then(r => {
       renderSyncUI(S.status());
-      if (userInitiated) toast(`تمت المزامنة: ${r.total} تقرير (أُضيف ${r.added}، حُدّث ${r.updated}، حُذف ${r.removed})`, 'ok', 3800);
+      /* تعارض مزامنة: نُظهره بوضوح بدل ضياع التعديلات بصمت */
+      if (r && r.conflictNotice) {
+        toast('⚠️ ' + r.conflictNotice, 'warn', 14000);
+      } else if (userInitiated) {
+        toast(`تمت المزامنة: ${r.total} تقرير (أُضيف ${r.added}، حُدّث ${r.updated}، حُذف ${r.removed})`, 'ok', 3800);
+      }
     });
   }).catch(err => {
     /* مهلة أطول: رسائل الدخول تحتوي خطوات الحل وتحتاج قراءة */
@@ -2528,6 +2780,8 @@ function init() {
   refreshArchiveMeta();
   showView('report');
   const car = $('#archCount'); if (car) car.textContent = state.reports.length;
+  /* نبني سجل التوصيات من التقارير فور الإقلاع، فتظهر أعداد المتابعة صحيحة */
+  rebuildRegistry();
   renderSyncUI({ configured: false, connected: false });
   setTimeout(initSync, 300);
 
@@ -2548,6 +2802,637 @@ window.ADMHReport.boot = function () {
   window.ADMHReport.__booted = true;
   init();
 };
+
+/* =============================================================================
+   سجل المؤسسات · دورة حياة التوصيات · لوحة المؤشرات
+   =============================================================================
+   الوحدة الحسابية في registry.js (منطق خالص قابل للاختبار).
+   وهنا الواجهة: تخزين السجل، الرسم، والأحداث.
+   نصل إلى registry.js عند **التنفيذ** لا عند التعريف، لأن ترتيب التحميل
+   يضع app.js قبل registry.js.
+   ============================================================================= */
+const LS_REGISTRY = 'admh.registry.v1';
+
+/** وحدة registry.js الحسابية */
+const REG = () => (window.ADMHReport && window.ADMHReport.registry) || null;
+
+/** السجل المخزَّن محلياً — يُقرأ مرة ويُبقى في الذاكرة */
+let registryCache = null;
+
+/** يقرأ السجل من التخزين (مع تنظيف البنية) */
+function readRegistry() {
+  const R = REG();
+  if (!R) return { facilities: {}, recs: {}, version: 1 };
+  if (registryCache) return registryCache;
+  registryCache = R.normalizeRegistry(jread(LS_REGISTRY, null));
+  return registryCache;
+}
+
+/** يكتب السجل ويختم الوقت ليُزامَن */
+function writeRegistry(reg, silent) {
+  registryCache = reg || registryCache;
+  const ok = silent ? jwriteSilent(LS_REGISTRY, registryCache) : jwrite(LS_REGISTRY, registryCache);
+  if (ok) stampLocalChange('registry');
+  return ok;
+}
+
+/**
+ * يُعيد بناء التوصيات من التقارير مع **الحفاظ على حالات المستخدم**.
+ * تُستدعى عند تغيّر التقارير.
+ */
+function rebuildRegistry() {
+  const R = REG();
+  if (!R) return null;
+  const reg = readRegistry();
+  const before = Object.keys(reg.recs).length;
+  reg.recs = R.buildRecs(state.reports, reg);
+  const after = Object.keys(reg.recs).length;
+  if (before !== after) writeRegistry(reg, true);
+  updateFollowCounts();
+  return reg;
+}
+
+/** يُحدّث أعداد المتابعة في القائمة الجانبية */
+function updateFollowCounts() {
+  const R = REG();
+  if (!R) return;
+  const reg = readRegistry();
+  const facs = R.buildFacilities(state.reports);
+  const recs = Object.keys(reg.recs).map(k => reg.recs[k]);
+  const open = recs.filter(r => !R.isClosed(r.status)).length;
+
+  const fc = $('#facCount'); if (fc) fc.textContent = Object.keys(facs).length;
+  const rc = $('#recCount'); if (rc) rc.textContent = open;
+}
+
+/* ------------------------------------------------------------------ ملف المؤسسة */
+
+/** مفتاح الملف المفتوح حالياً */
+let openFacilityKey = null;
+
+/** يبني صفوف جدول المؤسسات */
+function renderFacilities() {
+  const R = REG();
+  const tb = $('#tFacilities tbody');
+  if (!R || !tb) return;
+
+  const reg = readRegistry();
+  const facs = R.buildFacilities(state.reports);
+  const recs = Object.keys(reg.recs).map(k => reg.recs[k]);
+
+  /* نُثري كل ملف بإحصاءاته */
+  const rows = Object.keys(facs).map(k => {
+    const f = facs[k];
+    const mine = recs.filter(r => r.facilityKey === k);
+    return {
+      key: k, name: f.name, sector: f.sector, kind: f.kind,
+      visits: f.visits.length, lastVisit: f.lastVisit,
+      firstVisit: f.firstVisit,
+      recs: mine.length,
+      open: mine.filter(r => !R.isClosed(r.status)).length,
+      overdue: mine.filter(r => R.isOverdue(r)).length,
+      notes: (reg.facilities[k] && reg.facilities[k].notes) || '',
+    };
+  });
+
+  /* البحث */
+  const q = tidy(($('#facSearch') || {}).value || '');
+  let list = rows;
+  if (q) {
+    const nq = R.facilityKey(q);       /* بحث مُوحَّد: يتجاهل الهمزات والتشكيل */
+    list = rows.filter(r => R.facilityKey(r.name + ' ' + r.sector).indexOf(nq) >= 0);
+  }
+
+  /* الترتيب */
+  const sort = ($('#facSort') || {}).value || 'recent';
+  const cmp = {
+    recent: (a, b) => String(b.lastVisit || '').localeCompare(String(a.lastVisit || '')),
+    visits: (a, b) => b.visits - a.visits,
+    open: (a, b) => b.open - a.open,
+    overdue: (a, b) => b.overdue - a.overdue,
+    name: (a, b) => String(a.name).localeCompare(String(b.name), 'ar'),
+  }[sort] || (() => 0);
+  list = list.slice().sort(cmp);
+
+  if (!list.length) {
+    tb.innerHTML = `<tr><td colspan="7" class="empty">${q ? 'لا نتائج مطابقة' : 'لا مؤسسات بعد — احفظ تقريراً أولاً'}</td></tr>`;
+  } else {
+    tb.innerHTML = list.map(f => `
+      <tr class="facrow${f.key === openFacilityKey ? ' on' : ''}" data-fac="${esc(f.key)}">
+        <td data-label="المؤسسة"><b>${esc(f.name || '—')}</b>${f.notes ? ' <span class="pill">ملاحظة</span>' : ''}</td>
+        <td data-label="القطاع">${esc(f.sector || '—')}</td>
+        <td data-label="الزيارات">${f.visits}</td>
+        <td data-label="التوصيات">${f.recs}</td>
+        <td data-label="مفتوحة">${f.open}</td>
+        <td data-label="متأخرة">${f.overdue ? `<span style="color:#b3261e;font-weight:700">${f.overdue}</span>` : '0'}</td>
+        <td data-label="آخر زيارة">${esc(fmtDate(f.lastVisit) || '—')}</td>
+      </tr>`).join('');
+  }
+
+  const st = $('#facStats');
+  if (st) {
+    const tot = Object.keys(facs).length;
+    const totRecs = recs.length;
+    const over = recs.filter(r => R.isOverdue(r)).length;
+    st.textContent = `${tot} مؤسسة · ${totRecs} توصية · ${over} متأخرة`;
+  }
+  updateFollowCounts();
+}
+
+/** يفتح ملف مؤسسة ويعرض زياراتها وتوصياتها */
+function openFacility(key) {
+  const R = REG();
+  if (!R || !key) return;
+  openFacilityKey = key;
+  const reg = readRegistry();
+  const facs = R.buildFacilities(state.reports);
+  const f = facs[key];
+
+  const box = $('#facDetail');
+  if (!box) return;
+  if (!f) { box.classList.add('hidden'); renderFacilities(); return; }
+  box.classList.remove('hidden');
+
+  $('#facDetailName').textContent = f.name || '—';
+  $('#facDetailMeta').textContent =
+    [f.kind, f.sector].filter(Boolean).join(' · ') +
+    ` · ${f.visits.length} زيارة` +
+    (f.firstVisit ? ` · الأولى ${fmtDate(f.firstVisit)}` : '') +
+    (f.lastVisit ? ` · الأخيرة ${fmtDate(f.lastVisit)}` : '');
+
+  /* الملاحظات الدائمة */
+  const saved = reg.facilities[key];
+  const ta = $('#facNotes');
+  if (ta) ta.value = (saved && saved.notes) || '';
+
+  /* الزيارات */
+  const tb = $('#tFacVisits tbody');
+  if (tb) {
+    tb.innerHTML = f.visits.map(v => `
+      <tr>
+        <td data-label="التاريخ">${esc(fmtDate(v.date) || '—')}</td>
+        <td data-label="النوع">${esc(v.visitType || '—')}</td>
+        <td data-label="العنوان">${esc(v.title || '—')}</td>
+        <td class="no-print"><button class="btn ghost sm" data-openrep="${esc(v.id)}">فتح</button></td>
+      </tr>`).join('') || '<tr><td colspan="4" class="empty">لا زيارات</td></tr>';
+  }
+
+  /* توصيات هذه المؤسسة */
+  const mine = Object.keys(reg.recs).map(k => reg.recs[k])
+    .filter(r => r.facilityKey === key)
+    .sort((a, b) => String(b.visitDate || '').localeCompare(String(a.visitDate || '')));
+  const rb = $('#facRecs');
+  if (rb) rb.innerHTML = renderRecCards(mine, true);
+
+  renderFacilities();
+  box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ------------------------------------------------------------------ التوصيات */
+
+/**
+ * يرسم بطاقات التوصيات.
+ * @param {Array} list التوصيات
+ * @param {boolean} [compact] بلا فلاتر داخل البطاقة (داخل ملف المؤسسة)
+ */
+function renderRecCards(list, compact) {
+  const R = REG();
+  if (!R) return '';
+  if (!list.length) return '<p class="empty">لا توصيات مطابقة.</p>';
+
+  return list.map(rec => {
+    const stt = R.statusOf(rec.status);
+    const over = R.isOverdue(rec);
+    const days = R.daysOverdue(rec);
+    const facs = R.buildFacilities(state.reports);
+    const f = facs[rec.facilityKey];
+    const facName = (f && f.name) || (rec.facilityKey ? '—' : 'غير مرتبطة');
+
+    const statusOpts = R.STATUSES.map(s =>
+      `<option value="${s.k}"${s.k === rec.status ? ' selected' : ''}>${esc(s.t)}</option>`).join('');
+
+    return `
+      <div class="rec" data-rec="${esc(rec.id)}">
+        <div class="top">
+          <span class="rid">${esc(rec.id)}</span>
+          <span class="badge ${esc(rec.status)}">${esc(stt.t)}</span>
+          ${over ? `<span class="badge over">متأخرة ${days} يوماً</span>` : ''}
+          <div class="txt">${esc(rec.text)}</div>
+        </div>
+        <div class="meta">
+          ${compact ? '' : `<b>${esc(facName)}</b> · `}
+          ${rec.visitDate ? 'زيارة ' + esc(fmtDate(rec.visitDate)) : ''}
+          ${rec.owner ? ' · ' + esc(rec.owner) : ''}
+          ${rec.evidence ? ' · دليل: ' + esc(rec.evidence) : ''}
+          ${rec.verifiedAt ? ' · تحقق ' + esc(fmtDate(String(rec.verifiedAt).slice(0, 10))) : ''}
+        </div>
+        <div class="ctl">
+          <div class="grp">
+            <label>حالة التنفيذ</label>
+            <select data-recstatus="${esc(rec.id)}">${statusOpts}</select>
+          </div>
+          <div class="grp">
+            <label>موعد الإنجاز</label>
+            <input type="date" data-recDue="${esc(rec.id)}" value="${esc(String(rec.dueDate || '').slice(0, 10))}">
+          </div>
+          ${rec.manual ? `<button class="btn danger sm" data-recDel="${esc(rec.id)}">حذف</button>` : ''}
+        </div>
+        <div class="note">
+          <input type="text" data-recOwner="${esc(rec.id)}" placeholder="الجهة المسؤولة"
+                 value="${esc(rec.owner || '')}">
+          <input type="text" data-recEvidence="${esc(rec.id)}" placeholder="دليل المعالجة (رقم كتاب / ملاحظة)"
+                 value="${esc(rec.evidence || '')}">
+          <input type="text" data-recNote="${esc(rec.id)}" placeholder="ملاحظة المتابعة"
+                 value="${esc(rec.note || '')}">
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/** يرسم صفحة التوصيات كاملة مع الفلاتر */
+function renderRecs() {
+  const R = REG();
+  const box = $('#recList');
+  if (!R || !box) return;
+
+  const reg = readRegistry();
+  const all = Object.keys(reg.recs).map(k => reg.recs[k]);
+
+  /* نملأ الفلاتر مرة واحدة */
+  const fs = $('#recFilterStatus');
+  if (fs && !fs.options.length) {
+    fs.innerHTML = '<option value="">كل الحالات</option>' +
+      R.STATUSES.map(s => `<option value="${s.k}">${esc(s.t)}</option>`).join('');
+  }
+  const ff = $('#recFilterFac');
+  const facs = R.buildFacilities(state.reports);
+  if (ff) {
+    const cur = ff.value;
+    ff.innerHTML = '<option value="">كل المؤسسات</option>' +
+      Object.keys(facs).map(k => `<option value="${esc(k)}">${esc(facs[k].name)}</option>`).join('');
+    ff.value = cur;
+  }
+
+  /* الفلترة */
+  const st = ($('#recFilterStatus') || {}).value || '';
+  const fk = ($('#recFilterFac') || {}).value || '';
+  const q = tidy(($('#recSearch') || {}).value || '');
+  const due = ($('#recFilterDue') || {}).value || '';
+
+  let list = all.filter(rec => {
+    if (st && rec.status !== st) return false;
+    if (fk && rec.facilityKey !== fk) return false;
+    if (q && rec.text.indexOf(q) < 0) return false;
+    if (due === 'overdue' && !R.isOverdue(rec)) return false;
+    if (due === 'nodue' && rec.dueDate) return false;
+    return true;
+  });
+
+  /* الترتيب: المتأخرة أولاً ثم المفتوحة ثم الأحدث */
+  list = list.slice().sort((a, b) => {
+    const ao = R.isOverdue(a) ? 1 : 0, bo = R.isOverdue(b) ? 1 : 0;
+    if (ao !== bo) return bo - ao;
+    const ac = R.isClosed(a.status) ? 1 : 0, bc = R.isClosed(b.status) ? 1 : 0;
+    if (ac !== bc) return ac - bc;
+    return String(b.visitDate || '').localeCompare(String(a.visitDate || ''));
+  });
+
+  box.innerHTML = renderRecCards(list, false);
+
+  const stats = $('#recStats');
+  if (stats) {
+    const closed = list.filter(r => R.isClosed(r.status)).length;
+    const over = list.filter(r => R.isOverdue(r)).length;
+    stats.textContent = `${list.length} توصية معروضة · ${closed} منفذة · ${over} متأخرة`;
+  }
+  updateFollowCounts();
+}
+
+/* ------------------------------------------------------------------ لوحة المؤشرات */
+
+/** يرسم لوحة المؤشرات حسب الفترة المحدّدة */
+function renderDash() {
+  const R = REG();
+  const box = $('#dashBody');
+  if (!R || !box) return;
+
+  const from = ($('#dashFrom') || {}).value || '';
+  const to = ($('#dashTo') || {}).value || '';
+
+  const m = R.computeMetrics(state.reports, readRegistry(), { from: from, to: to });
+
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+
+  /* شريط توزيع */
+  const dist = (obj, total) => {
+    const keys = Object.keys(obj).sort((a, b) => obj[b] - obj[a]);
+    if (!keys.length) return '<p class="empty">لا بيانات في هذه الفترة.</p>';
+    return '<div class="dist">' + keys.map(k => `
+      <div class="row">
+        <span class="n">${esc(k)}</span>
+        <span class="b"><i style="width:${pct(obj[k], total)}%"></i></span>
+        <span class="c">${obj[k]}</span>
+      </div>`).join('') + '</div>';
+  };
+
+  const kpi = (v, l, cls, sub) =>
+    `<div class="kpi ${cls || ''}"><div class="v">${v}</div><div class="l">${esc(l)}</div>${sub ? `<div class="s">${esc(sub)}</div>` : ''}</div>`;
+
+  /* توزيع الحالات بالعربية */
+  const stDist = {};
+  R.STATUSES.forEach(s => { if (m.recs.byStatus[s.k]) stDist[s.t] = m.recs.byStatus[s.k]; });
+
+  box.innerHTML = `
+    <div class="card">
+      <h3 style="margin:0 0 4px">الزيارات</h3>
+      <div class="kpis">
+        ${kpi(m.visits, 'زيارة في الفترة')}
+        ${kpi(m.facilitiesVisited, 'مؤسسة تمت زيارتها', '', `من أصل ${m.facilitiesTotal} في السجل`)}
+        ${kpi(m.initialVisits, 'زيارة تفتيشية أولية')}
+        ${kpi(m.followUpVisits, 'زيارة متابعة')}
+      </div>
+      <h4 style="margin:14px 0 4px">حسب نوع الزيارة</h4>
+      ${dist(m.byType, m.visits)}
+      <h4 style="margin:14px 0 4px">حسب القطاع</h4>
+      ${dist(m.bySector, m.visits)}
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 4px">التوصيات</h3>
+      <div class="kpis">
+        ${kpi(m.recs.total, 'إجمالي التوصيات')}
+        ${kpi(m.recs.open, 'مفتوحة', m.recs.open ? 'warn' : '')}
+        ${kpi(m.recs.overdue, 'متأخرة عن موعدها', m.recs.overdue ? 'warn' : 'ok')}
+        ${kpi(m.recs.closureRate + '%', 'نسبة الإغلاق', m.recs.closureRate >= 70 ? 'ok' : '')}
+      </div>
+      <div class="rbar" title="نسبة الإغلاق"><i style="width:${m.recs.closureRate}%"></i></div>
+      <p class="hint">${m.recs.closed} منفذة من أصل ${m.recs.total} توصية.</p>
+      <h4 style="margin:14px 0 4px">حسب حالة التنفيذ</h4>
+      ${dist(stDist, m.recs.total)}
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 4px">المؤسسات</h3>
+      ${m.facilities.length ? `
+      <div class="tw"><table>
+        <thead><tr>
+          <th>المؤسسة</th><th style="width:110px">القطاع</th>
+          <th style="width:80px">زيارات</th><th style="width:90px">توصيات</th>
+          <th style="width:80px">مفتوحة</th><th style="width:80px">متأخرة</th>
+        </tr></thead>
+        <tbody>${m.facilities.map(f => `
+          <tr>
+            <td data-label="المؤسسة"><b>${esc(f.name || '—')}</b></td>
+            <td data-label="القطاع">${esc(f.sector || '—')}</td>
+            <td data-label="زيارات">${f.visits}</td>
+            <td data-label="توصيات">${f.recs}</td>
+            <td data-label="مفتوحة">${f.open}</td>
+            <td data-label="متأخرة">${f.overdue ? `<span style="color:#b3261e;font-weight:700">${f.overdue}</span>` : '0'}</td>
+          </tr>`).join('')}</tbody>
+      </table></div>` : '<p class="empty">لا مؤسسات في هذه الفترة.</p>'}
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 4px">الملاحظات الأكثر تكراراً</h3>
+      ${m.topNotes.length
+        ? dist(m.topNotes.reduce((o, n) => { o[n.text] = n.count; return o; }, {}), m.topNotes[0].count)
+        : '<p class="empty">لا ملاحظات مسجّلة في هذه الفترة.</p>'}
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ الأحداث */
+
+/** يربط أزرار المتابعة — تُستدعى من bindButtons */
+function bindFollowUps() {
+  const R = REG();
+  if (!R) return;
+
+  /* فتح ملف مؤسسة */
+  bindOn('#tFacilities', (e) => {
+    const tr = e.target.closest('[data-fac]');
+    if (!tr) return;
+    openFacility(tr.getAttribute('data-fac'));
+  });
+  bindOn('#btnFacClose', () => {
+    openFacilityKey = null;
+    const box = $('#facDetail');
+    if (box) box.classList.add('hidden');
+    renderFacilities();
+  });
+  bindOn('#btnFacSaveNotes', () => {
+    if (!openFacilityKey) return;
+    const reg = readRegistry();
+    const R2 = REG();
+    const facs = R2.buildFacilities(state.reports);
+    const f = facs[openFacilityKey] || {};
+    reg.facilities[openFacilityKey] = Object.assign({
+      key: openFacilityKey, name: f.name || '', sector: f.sector || '', kind: f.kind || '',
+      firstVisit: f.firstVisit || null, lastVisit: f.lastVisit || null,
+    }, reg.facilities[openFacilityKey] || {}, {
+      notes: tidy(($('#facNotes') || {}).value || ''),
+      updatedAt: new Date().toISOString(),
+    });
+    if (writeRegistry(reg)) toast('حُفظت ملاحظات المؤسسة', 'ok');
+  });
+  bindOn('#btnFacNewVisit', () => {
+    if (!openFacilityKey) return;
+    const R2 = REG();
+    const facs = R2.buildFacilities(state.reports);
+    const f = facs[openFacilityKey];
+    if (!f) return;
+    /* زيارة جديدة: نفس المؤسسة، وتاريخ اليوم، ونوع متابعة */
+    state.report = blankReport();
+    state.report.facilityName = f.name;
+    state.report.sector = f.sector;
+    state.report.facilityKind = f.kind || 'مركز صحي';
+    state.report.visitType = 'زيارة متابعة';
+    state.editingId = state.report.id;
+    renderAll();
+    showView('report');
+    toast('بدأت زيارة متابعة لـ' + f.name, 'ok');
+  });
+  bindOn('#tFacVisits', (e) => {
+    const b = e.target.closest('[data-openrep]');
+    if (!b) return;
+    openReportById(b.getAttribute('data-openrep'));
+  });
+
+  /* فلاتر المؤسسات */
+  ['#facSearch', '#facSort'].forEach(sel => {
+    const el = $(sel);
+    if (el) el.addEventListener('input', renderFacilities);
+    if (el) el.addEventListener('change', renderFacilities);
+  });
+
+  /* فلاتر التوصيات */
+  ['#recFilterStatus', '#recFilterFac', '#recSearch', '#recFilterDue'].forEach(sel => {
+    const el = $(sel);
+    if (el) el.addEventListener('input', renderRecs);
+    if (el) el.addEventListener('change', renderRecs);
+  });
+
+  /* تغيير حالة توصية أو موعدها.
+     ---------------------------------------------------------------------
+     مهم: bindOn تُثبّت onclick فقط، وأحداث <select> و<input> هي **change**
+     لا click — فلو اعتمدنا على bindOn لضاعت كل تعديلات المستخدم بصمت.
+     لذلك نستمع إلى الحدثين معاً عبر addEventListener.
+     --------------------------------------------------------------------- */
+  ['#recList', '#facRecs'].forEach(sel => {
+    const box = $(sel);
+    if (!box) return;
+    box.addEventListener('change', handleRecEdit);
+    box.addEventListener('input', handleRecEdit);
+    box.addEventListener('click', handleRecEdit);
+  });
+
+  /* إضافة توصية يدوية */
+  bindOn('#btnRecAdd', () => {
+    const reg = readRegistry();
+    const R2 = REG();
+    const txt = prompt('نص التوصية الجديدة:');
+    if (!txt || !txt.trim()) return;
+    const facKey = prompt('مفتاح المؤسسة (اتركه فارغاً لتوصية عامة):') || '';
+    const id = R2.addManualRec(reg, facKey, txt, prompt('الجهة المسؤولة (اختياري):') || '');
+    if (id && writeRegistry(reg)) { toast('أُضيفت التوصية', 'ok'); renderRecs(); }
+  });
+
+  /* لوحة المؤشرات */
+  bindOn('#btnDashApply', renderDash);
+  ['#dashFrom', '#dashTo'].forEach(sel => {
+    const el = $(sel);
+    if (el) el.addEventListener('change', () => { syncDashPreset(); renderDash(); });
+  });
+  bindOn('#dashPreset', () => { applyDashPreset(); renderDash(); });
+  bindOn('#btnDashPrint', () => { showView('dash'); setTimeout(() => window.print(), 150); });
+}
+
+/** يُحدّث التاريخين من الفترة السريعة */
+function applyDashPreset() {
+  const v = ($('#dashPreset') || {}).value || '';
+  const from = $('#dashFrom'), to = $('#dashTo');
+  if (!from || !to) return;
+  if (v === 'all') { from.value = ''; to.value = ''; return; }
+  const days = parseInt(v, 10);
+  if (!days) return;
+  const now = new Date();
+  const start = new Date(now.getTime() - days * 86400000);
+  to.value = now.toISOString().slice(0, 10);
+  from.value = start.toISOString().slice(0, 10);
+}
+
+/** إن غيّر المستخدم التاريخين يدوياً، تعود الفترة السريعة إلى «مخصّص» */
+function syncDashPreset() {
+  const p = $('#dashPreset');
+  if (p) p.value = '';
+}
+
+/** يعالج تعديل توصية من الواجهة */
+function handleRecEdit(e) {
+  const R = REG();
+  if (!R) return;
+  const reg = readRegistry();
+
+  const sel = e.target.closest('[data-recstatus]');
+  if (sel) {
+    const id = sel.getAttribute('data-recstatus');
+    R.updateRec(reg, id, { status: sel.value });
+    if (writeRegistry(reg)) {
+      const st = R.statusOf(sel.value);
+      toast(`حالة التوصية: ${st.t}`, 'ok', 2200);
+      renderRecs();
+      if (openFacilityKey) openFacility(openFacilityKey);
+      renderDash();
+    }
+    return;
+  }
+
+  const due = e.target.closest('[data-recDue]');
+  if (due) {
+    const id = due.getAttribute('data-recDue');
+    R.updateRec(reg, id, { dueDate: due.value || null });
+    if (writeRegistry(reg)) { renderRecs(); renderFacilities(); }
+    return;
+  }
+
+  /* حقول النص: تُحفظ عند الخروج من الحقل.
+     نمنع التسجيل المزدوج لأننا نستمع إلى input وchange وclick معاً،
+     فـinput يتكرّر مع كل حرف. */
+  const txtField = e.target.closest('[data-recOwner],[data-recEvidence],[data-recNote]');
+  if (txtField && e.type === 'change') {
+    const map = { recOwner: 'owner', recEvidence: 'evidence', recNote: 'note' };
+    for (const attr in map) {
+      if (txtField.hasAttribute('data-' + attr)) {
+        const id = txtField.getAttribute('data-' + attr);
+        const val = tidy(txtField.value);
+        const reg2 = readRegistry();
+        if (reg2.recs[id] && reg2.recs[id][map[attr]] === val) return;   /* لا تغيير */
+        R.updateRec(reg, id, { [map[attr]]: val });
+        writeRegistry(reg);
+        return;
+      }
+    }
+  }
+
+  const del = e.target.closest('[data-recDel]');
+  if (del) {
+    const id = del.getAttribute('data-recDel');
+    if (!confirm('حذف هذه التوصية اليدوية؟')) return;
+    if (R.removeRec(reg, id) && writeRegistry(reg)) {
+      toast('حُذفت التوصية', 'ok');
+      renderRecs();
+      renderDash();
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ فتح تقرير */
+
+/** يفتح تقريراً محفوظاً في المحرّر */
+function openReportById(id) {
+  const r = state.reports.find(x => x.id === id);
+  if (!r) { toast('التقرير غير موجود', 'warn'); return; }
+  state.report = migrate(JSON.parse(JSON.stringify(r)));
+  state.editingId = state.report.id;
+  renderAll();
+  showView('report');
+  toast('فُتح التقرير: ' + (state.report.title || state.report.facilityName || ''), 'ok');
+}
+
+/** يسحب توصيات المؤسسة من السجل إلى «متابعة التوصيات السابقة» في التقرير */
+function pullPreviousRecs() {
+  const R = REG();
+  if (!R) return 0;
+  const key = R.facilityKey(state.report.facilityName, state.report.sector);
+  if (!key) { toast('اكتب اسم المؤسسة أولاً', 'warn'); return 0; }
+
+  const reg = readRegistry();
+  const mine = Object.keys(reg.recs).map(k => reg.recs[k])
+    .filter(rec => rec.facilityKey === key)
+    /* نستثني توصيات هذا التقرير نفسه — فهي ليست «سابقة» */
+    .filter(rec => rec.sourceReportId !== state.report.id);
+
+  if (!mine.length) { toast('لا توصيات سابقة لهذه المؤسسة', 'warn'); return 0; }
+
+  const have = {};
+  (state.report.prevRecs || []).forEach(p => { have[tidy(p.text)] = true; });
+
+  let added = 0;
+  mine.forEach(rec => {
+    if (have[rec.text]) return;
+    state.report.prevRecs = state.report.prevRecs || [];
+    state.report.prevRecs.push({
+      text: rec.text,
+      status: R.statusOf(rec.status).t,
+      note: [rec.owner, rec.note, rec.evidence].filter(Boolean).join(' — '),
+    });
+    added += 1;
+  });
+
+  if (added) { rerender('prevRecs'); toast(`سُحبت ${added} توصية سابقة`, 'ok'); }
+  else toast('كل التوصيات السابقة موجودة بالفعل', 'ok');
+  return added;
+}
+
 
 /* ------------------------------------------------------------------ التصدير
    يُستخدم للاختبار الآلي، ويوفّر واجهة برمجية بسيطة للتشغيل من الخارج. */
@@ -2580,6 +3465,14 @@ const API = {
   uid, safeName,
   exportArchiveJSON, importArchiveJSON,
   sync, initSync, renderSyncUI, syncNow,
+  /* سلامة التخزين وملكية البيانات المحلية */
+  jwrite, jwriteSilent, readLocalOwner, markLocalOwner, ownerRefused,
+  stampLocalChange, localStamp, markSynced, blankSyncMeta, readSyncMeta,
+  /* المتابعة: سجل المؤسسات ودورة حياة التوصيات ولوحة المؤشرات */
+  readRegistry, writeRegistry, rebuildRegistry, updateFollowCounts,
+  renderFacilities, openFacility, renderRecs, renderRecCards, renderDash,
+  bindFollowUps, openReportById, pullPreviousRecs, handleRecEdit,
+  applyDashPreset, syncDashPreset,
 };
 if (typeof window !== 'undefined') window.ADMH = API;
 if (typeof module !== 'undefined' && module.exports) module.exports = API;

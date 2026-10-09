@@ -232,6 +232,69 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 .pill{background:var(--hover);border-radius:999px;padding:3px 10px;font-size:.78em;color:var(--muted)}
 
 /* =============================================================================
+   لوحة المؤشرات · التوصيات · ملف المؤسسة
+   ============================================================================= */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0}
+.kpi{background:var(--card,#fff);border:1px solid var(--border);border-radius:12px;padding:12px 14px}
+.kpi .v{font-size:1.7em;font-weight:700;color:var(--brand,#004d40);line-height:1.1}
+.kpi .l{font-size:.82em;color:var(--muted);margin-top:3px}
+.kpi .s{font-size:.75em;color:var(--muted);margin-top:2px;opacity:.85}
+.kpi.warn .v{color:#b3261e}
+.kpi.ok .v{color:#1b7f3b}
+
+.rbar{height:9px;border-radius:99px;background:var(--hover);overflow:hidden;margin-top:7px}
+.rbar > i{display:block;height:100%;background:#1b7f3b;border-radius:99px}
+
+.rec{border:1px solid var(--border);border-radius:12px;padding:11px 13px;margin-bottom:9px;background:var(--card,#fff)}
+.rec .top{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
+.rec .rid{font-size:.74em;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace;flex:none}
+.rec .txt{flex:1;min-width:180px;line-height:1.65}
+.rec .meta{font-size:.78em;color:var(--muted);margin-top:5px}
+.rec .ctl{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-top:9px;
+  padding-top:9px;border-top:1px dashed var(--border)}
+/* لا نستخدم padding المختصرة هنا: القاعدة العامة تضبط padding-inline-start:30px
+   لمساحة سهم القائمة، و«padding:5px 7px» يلغيها فيرتكب النص تحت السهم. */
+.rec select,.rec input[type=date],.rec input[type=text]{
+  font-size:.85em;padding-block:6px;padding-inline-end:8px;min-height:0}
+.rec .ctl select{min-width:150px}
+.rec .ctl input[type=date]{min-width:150px}
+.rec .grp{display:flex;flex-direction:column;gap:3px}
+.rec .grp > label{font-size:.76em;color:var(--muted);padding-inline-start:2px}
+.rec .note{margin-top:9px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:7px}
+.rec .note input{width:100%}
+
+.badge{display:inline-block;border-radius:999px;padding:2px 9px;font-size:.75em;font-weight:600;color:#fff;white-space:nowrap}
+.badge.pending{background:#b3261e}
+.badge.progress{background:#b26a00}
+.badge.done{background:#1b7f3b}
+.badge.failed{background:#8e0000}
+.badge.verify{background:#00658f}
+.badge.over{background:#000;font-size:.7em;margin-inline-start:5px}
+
+.facrow{cursor:pointer}
+.facrow:hover{background:var(--hover)}
+.facrow.on{background:var(--hover);font-weight:600}
+
+/* أشرطة التوزيع */
+.dist{margin:10px 0}
+.dist .row{display:flex;align-items:center;gap:9px;margin-bottom:5px;font-size:.87em}
+.dist .row .n{min-width:96px;color:var(--muted)}
+.dist .row .b{flex:1;height:16px;background:var(--hover);border-radius:5px;overflow:hidden}
+.dist .row .b > i{display:block;height:100%;background:var(--brand,#00796b);border-radius:5px}
+.dist .row .c{min-width:44px;text-align:end;font-variant-numeric:tabular-nums}
+
+@media(max-width:640px){
+  .kpi .v{font-size:1.4em}
+  .rec .ctl{flex-direction:column;align-items:stretch}
+  .rec .ctl > *{width:100%}
+}
+@media print{
+  .kpis{grid-template-columns:repeat(3,1fr)}
+  .kpi{break-inside:avoid}
+  .rec{break-inside:avoid}
+}
+
+/* =============================================================================
    الهاتف: تحويل جداول الإدخال إلى بطاقات
    -----------------------------------------------------------------------------
    الجداول أعرض من الشاشة، فكان المستخدم يضطر للسحب أفقياً ليرى بقية الحقول،
@@ -353,6 +416,10 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
       <button data-go="report" class="active">📝 تحرير التقرير</button>
       <button data-go="preview">👁️ معاينة التقرير</button>
       <button data-go="archive">🗂️ الأرشيف <span class="pill" id="archCount">0</span></button>
+      <div class="navsec">المتابعة</div>
+      <button data-go="facilities">🏥 ملف المؤسسات <span class="pill" id="facCount">0</span></button>
+      <button data-go="recs">✅ التوصيات <span class="pill" id="recCount">0</span></button>
+      <button data-go="dash">📊 لوحة المؤشرات</button>
       <div class="navsec">أدوات</div>
       <button data-go="library">📚 مكتبة العبارات</button>
       <button data-go="settings">⚙️ الإعدادات</button>
@@ -588,7 +655,13 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
             <thead><tr><th style="width:52px">ت</th><th style="width:44%">التوصية السابقة</th><th style="width:22%">الحالة</th><th>ملاحظة</th><th class="no-print" style="width:52px"></th></tr></thead>
             <tbody></tbody>
           </table></div>
-          <div class="btnrow no-print"><button class="btn ghost sm" data-add="prevRecs">+ توصية سابقة</button></div>
+          <div class="btnrow no-print">
+            <button class="btn ghost sm" data-add="prevRecs">+ توصية سابقة</button>
+            <button class="btn info sm" id="btnPullPrevRecs" type="button"
+                    title="يجلب توصيات هذه المؤسسة من سجل التوصيات مع حالاتها الحالية">
+              ⤓ سحب توصيات هذه المؤسسة
+            </button>
+          </div>
         </div>
 
         <div class="card">
@@ -662,6 +735,110 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
           </div>
           <p class="hint" id="archStats"></p>
         </div>
+      </section>
+
+      <!-- ============ FACILITIES ============ -->
+      <section id="view-facilities" class="hidden">
+        <div class="card">
+          <h2>🏥 ملف المؤسسات</h2>
+          <p class="sub">ملف لكل مؤسسة صحية يضمّ زياراتها وتوصياتها وملاحظاتها المتكررة.
+            تُبنى الملفات تلقائياً من التقارير المحفوظة — لا إدخال مزدوج.</p>
+          <div class="grid">
+            <div class="f"><label for="facSearch">بحث</label><input type="text" id="facSearch" placeholder="اسم المؤسسة / القطاع"></div>
+            <div class="f"><label for="facSort">الترتيب</label>
+              <select id="facSort">
+                <option value="recent">الأحدث زيارةً</option>
+                <option value="visits">الأكثر زيارات</option>
+                <option value="open">الأكثر توصيات مفتوحة</option>
+                <option value="overdue">الأكثر تأخراً</option>
+                <option value="name">الاسم</option>
+              </select>
+            </div>
+          </div>
+          <div class="tw"><table id="tFacilities">
+            <thead><tr>
+              <th>المؤسسة</th><th style="width:130px">القطاع</th>
+              <th style="width:80px">الزيارات</th><th style="width:90px">التوصيات</th>
+              <th style="width:80px">مفتوحة</th><th style="width:80px">متأخرة</th>
+              <th style="width:110px">آخر زيارة</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <p class="hint" id="facStats"></p>
+        </div>
+
+        <!-- ملف مؤسسة مفتوح -->
+        <div class="card hidden" id="facDetail">
+          <div class="btnrow" style="justify-content:space-between;align-items:center">
+            <h2 id="facDetailName" style="margin:0"></h2>
+            <button class="btn ghost sm" id="btnFacClose">✕ إغلاق الملف</button>
+          </div>
+          <p class="hint" id="facDetailMeta"></p>
+          <div class="f" style="margin:10px 0">
+            <label for="facNotes">ملاحظات دائمة على المؤسسة (تظهر في كل زيارة قادمة)</label>
+            <textarea id="facNotes" rows="3" placeholder="مثال: المبنى مستأجر — لا تتوفر صالة انتظار كافية."></textarea>
+          </div>
+          <div class="btnrow">
+            <button class="btn sm" id="btnFacSaveNotes">💾 حفظ الملاحظات</button>
+            <button class="btn ghost sm" id="btnFacNewVisit">📝 زيارة جديدة لهذه المؤسسة</button>
+          </div>
+          <h3 style="margin:16px 0 6px">سجل الزيارات</h3>
+          <div class="tw"><table id="tFacVisits">
+            <thead><tr><th>التاريخ</th><th>النوع</th><th>العنوان</th><th class="no-print" style="width:110px">إجراء</th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <h3 style="margin:16px 0 6px">توصيات هذه المؤسسة</h3>
+          <div id="facRecs"></div>
+        </div>
+      </section>
+
+      <!-- ============ RECOMMENDATIONS ============ -->
+      <section id="view-recs" class="hidden">
+        <div class="card">
+          <h2>✅ دورة حياة التوصيات</h2>
+          <p class="sub">كل توصية لها رقم ثابت وحالة تنفيذ وموعد ودليل معالجة.
+            تُنشأ تلقائياً من التقارير، ويمكن إضافة توصيات يدوية.</p>
+          <div class="grid">
+            <div class="f"><label for="recFilterStatus">الحالة</label><select id="recFilterStatus"></select></div>
+            <div class="f"><label for="recFilterFac">المؤسسة</label><select id="recFilterFac"></select></div>
+            <div class="f"><label for="recSearch">بحث في النص</label><input type="text" id="recSearch" placeholder="كلمة من التوصية"></div>
+            <div class="f"><label for="recFilterDue">التأخير</label>
+              <select id="recFilterDue">
+                <option value="">الكل</option>
+                <option value="overdue">المتأخرة فقط</option>
+                <option value="nodue">بلا موعد</option>
+              </select>
+            </div>
+          </div>
+          <div id="recList"></div>
+          <p class="hint" id="recStats"></p>
+        </div>
+      </section>
+
+      <!-- ============ DASHBOARD ============ -->
+      <section id="view-dash" class="hidden">
+        <div class="card">
+          <h2>📊 لوحة المؤشرات</h2>
+          <p class="sub">مؤشرات محسوبة من بيانات منظّمة — التقارير وحالات التوصيات.</p>
+          <div class="grid">
+            <div class="f"><label for="dashFrom">من تاريخ</label><input type="date" id="dashFrom"></div>
+            <div class="f"><label for="dashTo">إلى تاريخ</label><input type="date" id="dashTo"></div>
+            <div class="f"><label for="dashPreset">فترة سريعة</label>
+              <select id="dashPreset">
+                <option value="">مخصّص</option>
+                <option value="30">آخر ٣٠ يوماً</option>
+                <option value="90">آخر ٩٠ يوماً</option>
+                <option value="365">آخر سنة</option>
+                <option value="all">كل الفترات</option>
+              </select>
+            </div>
+          </div>
+          <div class="btnrow">
+            <button class="btn sm" id="btnDashApply">↻ تحديث المؤشرات</button>
+            <button class="btn ghost sm" id="btnDashPrint">🖨️ طباعة اللوحة</button>
+          </div>
+        </div>
+        <div id="dashBody"></div>
       </section>
 
       <!-- ============ LIBRARY ============ -->
@@ -952,6 +1129,8 @@ kbd{background:var(--hover);border:1px solid var(--border);border-radius:5px;pad
 <script src="sync.js"></script>
 <!-- منطق التقرير: ملفات مستقلة لتسهيل التحرير عليها -->
 <script src="app.js"></script>
+<!-- سجل المؤسسات ودورة حياة التوصيات — وحدة مستقلة -->
+<script src="registry.js"></script>
 <script src="report-model.js"></script>
 <script src="report-preview.js"></script>
 <script src="report-clipboard.js"></script>

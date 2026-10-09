@@ -331,8 +331,35 @@ function __reportTest() {
   }
 }
 
+/* -----------------------------------------------------------------------------
+   ننتظر **الجاهزية الفعلية** بدل توقيت ثابت.
+   -----------------------------------------------------------------------------
+   كان توقيتاً ثابتاً (1800ms)، وكان يفشل أحياناً عند تشغيل مجموعات كثيرة
+   بالتوازي — لأن التهيئة تبطؤ فيصل الفحص قبل أن يكتمل الإقلاع. الآن نستطلع
+   حتى يصبح التطبيق جاهزاً فعلاً، بحدّ أقصى ٨ ثوانٍ.
+   ----------------------------------------------------------------------------- */
+function __readyToTest() {
+  try {
+    var A = window.ADMH, NS = window.ADMHReport;
+    if (!A || !NS) return false;
+    if (!A.state || !A.state.report) return false;
+    /* النموذج مبنيّ والقوائم مملوءة؟ */
+    if (typeof NS.buildModel !== 'function') return false;
+    if (typeof A.renderAll !== 'function') return false;
+    var dl = document.getElementById('dlRecordNames');
+    if (!dl) return false;
+    return true;
+  } catch (e) { return false; }
+}
+
+function __waitThenRun(tries) {
+  tries = tries || 0;
+  if (__readyToTest() || tries > 80) { __reportTest(); return; }
+  setTimeout(function () { __waitThenRun(tries + 1); }, 100);
+}
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', function () { setTimeout(__reportTest, 1800); });
+  document.addEventListener('DOMContentLoaded', function () { __waitThenRun(0); });
 } else {
-  setTimeout(__reportTest, 1800);
+  __waitThenRun(0);
 }

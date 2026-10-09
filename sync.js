@@ -80,6 +80,9 @@
     return {
       configured: state.configured, connected: state.connected, busy: state.busy,
       email: state.user && state.user.email ? state.user.email : (state.user ? 'مستخدم' : ''),
+      /* uid ضروري لحماية البيانات المحلية عند تبديل الحساب —
+         بلا إصداره هنا لا يستطيع التطبيق معرفة أن الحساب تغيّر. */
+      uid: (state.user && state.user.uid) ? state.user.uid : '',
       lastSync: state.lastSync, error: state.error, errorCode: state.errorCode || '',
       device: state.device,
     };
@@ -800,7 +803,10 @@
 
   function defaultHooks() {
     return {
-      load: () => ({ reports: [], settings: null, library: null, lists: null }),
+      load: () => ({
+        reports: [], settings: null, library: null, lists: null, registry: null,
+        libraryAt: null, listsAt: null, registryAt: null, synced: {},
+      }),
       save: () => {},
     };
   }
@@ -914,18 +920,83 @@
         const localAt = Date.parse((local.settings && local.settings.updatedAt) || 0) || 0;
         const remoteAt = Date.parse(remoteSettings && remoteSettings.updatedAt || 0) || 0;
 
-        let mergedSettings = local.settings || null;
-        let mergedLibrary = local.library || null;
-        let mergedLists = local.lists || null;
-        if (remotePayload && remoteAt > localAt) {
-          mergedSettings = remotePayload.settings || mergedSettings;
-          mergedLibrary = remotePayload.library || mergedLibrary;
-          mergedLists = remotePayload.lists || mergedLists;
+        /* =================================================================
+           دمج كل مجموعة بيانات على حدة — لا مقارنة زمنية واحدة
+           =================================================================
+           العطل الذي كان يحدث: كان هناك وقت واحد، وكان يُقرأ من معرّف غير
+           موجود فيصل null، فتصير المقارنة `remoteAt > 0` صحيحة دائماً —
+           فيُستبدل المحلي كله (الإعدادات والمكتبة والقوائم) **بصمت**.
+
+           القاعدة الآن لكل مجموعة:
+             ١) لم يتغيّر محلياً  ← نأخذ السحابي (آمن)
+             ٢) تغيّر محلياً فقط  ← نُبقي المحلي ونرفعه
+             ٣) لم يتغيّر السحابي ← نُبقي المحلي ونرفعه
+             ٤) تغيّر الاثنان     ← **تعارض**: نُبقي المحلي ونُبلّغ المستخدم
+                                    (لا استبدال صامت أبداً)
+           ================================================================= */
+        const synced = local.synced || {};
+        const nowIso = new Date().toISOString();
+        const conflicts = [];
+        const settingsChanged2 = { value: false };
+
+        /**
+         * يقارن مجموعة واحدة ويقرّر مصيرها.
+         * @returns {*} القيمة الفائزة
+         */
+        function mergeGroup(name, localValue, remoteValue, localAt2, remoteAt2) {
+          const both = !!(localValue && remoteValue);
+          if (!both) return localValue || remoteValue || localValue;
+
+          const lastAt = Date.parse(synced[name] || 0) || 0;
+          const lChanged = localAt2 > lastAt;
+          const rChanged = remoteAt2 > lastAt;
+
+          if (!rChanged) return localValue;                 /* ٢ و٣ */
+          if (!lChanged) { settingsChanged2.value = true; return remoteValue; }  /* ١ */
+          /* ٤ — تغيّر الطرفان: نحفظ المحلي ونُسجّل تعارضاً */
+          conflicts.push(name);
+          return localValue;
+        }
+
+        const mergedSettings = mergeGroup(
+          'settings', local.settings, (remotePayload && remotePayload.settings) || null,
+          localAt, remoteAt);
+        const mergedLibrary = mergeGroup(
+          'library', local.library, (remotePayload && remotePayload.library) || null,
+          Date.parse(local.libraryAt || 0) || 0, remoteAt);
+        const mergedLists = mergeGroup(
+          'lists', local.lists, (remotePayload && remotePayload.lists) || null,
+          Date.parse(local.listsAt || 0) || 0, remoteAt);
+        const mergedRegistry = mergeGroup(
+          'registry', local.registry, (remotePayload && remotePayload.registry) || null,
+          Date.parse(local.registryAt || 0) || 0, remoteAt);
+
+        if (settingsChanged2.value) {
           out.settings = mergedSettings;
           out.library = mergedLibrary;
           out.lists = mergedLists;
+          out.registry = mergedRegistry;
           settingsChanged = true;
         }
+        /* نُبلّغ عن التعارض ليُعرض للمستخدم بدل أن يضيع بصمت */
+        if (conflicts.length) {
+          out.conflicts = conflicts;
+          out.conflictNotice =
+            'تعارض في: ' + conflicts.map(c =>
+              c === 'settings' ? 'الإعدادات'
+              : c === 'library' ? 'مكتبة العبارات'
+              : c === 'registry' ? 'سجل التوصيات'
+              : 'القوائم'
+            ).join(' · ') + ' — أُبقيت نسختك المحلية وستُرفع. راجعها على الجهاز الآخر.';
+        }
+
+        /* أوقات المزامنة الجديدة لهذه الجولة */
+        out.synced = {
+          settings: nowIso,
+          library: nowIso,
+          lists: nowIso,
+          registry: nowIso,
+        };
 
         const toPush = mergedReports.filter(r => {
           const rem = remote.find(x => x.id === r.id);
@@ -941,6 +1012,7 @@
               settings: mergedSettings,
               library: mergedLibrary,
               lists: mergedLists,
+              registry: mergedRegistry,
             },
           }))
           .then(() => {
@@ -948,7 +1020,11 @@
             const stamp = new Date().toISOString();
             jwrite(LS_LAST, stamp);
             setState({ busy: false, lastSync: stamp, error: '' });
-            return { added, updated, removed, pushed: toPush.length, total: mergedReports.length, settingsChanged };
+            return {
+              added, updated, removed, pushed: toPush.length,
+              total: mergedReports.length, settingsChanged,
+              conflicts: conflicts, conflictNotice: out.conflictNotice || '',
+            };
           });
       });
     }).catch(err => {

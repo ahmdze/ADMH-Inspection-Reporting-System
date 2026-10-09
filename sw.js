@@ -2,7 +2,7 @@
    عامل الخدمة — تشغيل النظام بلا إنترنت
    ملاحظة: لا تُخزَّن أي بيانات تقارير هنا؛ البيانات في localStorage بالمتصفح.
    ============================================================================= */
-const CACHE = 'admh-reports-v18.0.0';
+const CACHE = 'admh-reports-v20.0.0';
 
 const ASSETS = [
   './',
@@ -11,6 +11,7 @@ const ASSETS = [
   './sync.js',
   './options.js',
   /* منطق التقرير — ملفات مستقلة */
+  './registry.js',
   './report-model.js',
   './report-preview.js',
   './report-clipboard.js',
