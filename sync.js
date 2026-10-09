@@ -112,8 +112,6 @@
     if (!cfg) cfg = resolveConfig();
     if (cfg) cfg.googleClientId = v;
     try { localStorage.setItem(LS_GCLIENT, v); } catch (e) {}
-    
-    // تصحيح الخطأ الأول: القيمة الفارغة تعيد التفعيل إذا كانت الإعدادات المضمّنة متوفرة
     gisDisabled = false;
     return v;
   }
@@ -197,9 +195,8 @@
       throw e;
     }
 
-    const isMobileUA = /Android|iPhone|iPad|iPod|Mobile|Opera Mini|IEMobile/i
-      .test((global.navigator && global.navigator.userAgent) || '');
-    const fedcmFirst = !isMobileUA && !isStandalone() && !popupClassicPreferred;
+    // فرض استخدام الوضع الكلاسيكي دائماً للهواتف لضمان عدم حجب نافذة الدخول
+    const fedcmFirst = false;
     const opts = fedcmFirst
       ? [{ use_fedcm_for_prompt: true }, {}]
       : [{}, { use_fedcm_for_prompt: true }];
@@ -280,7 +277,7 @@
               const type = (err && err.type) || '';
               let message = 'رفضت Google تهيئة الدخول من هذا النطاق.';
               if (type === 'invalid_client') {
-                message = 'معرّف العميل غير صحيح — تأكد من نسخه كاملاً.';
+                message = 'معرّف العميل غير صحيح — تأكد من نسخ المضمّن كاملاً.';
               } else if (type === 'origin_mismatch' || /origin/i.test(type)) {
                 message = 'النطاق غير مسجَّل في Authorized JavaScript origins.';
               } else if (type === 'idpiframe_initialization_failed' || /idpiframe/i.test(type)) {
@@ -568,24 +565,6 @@
     return provider;
   }
 
-  function preferRedirect() {
-    try {
-      const ua = (global.navigator && global.navigator.userAgent) || '';
-      if (/Android|iPhone|iPad|iPod|Mobile|Opera Mini|IEMobile/i.test(ua)) return true;
-      if (global.navigator && global.navigator.maxTouchPoints > 1) return true;
-      if (global.innerWidth && global.innerWidth < 768) return true;
-      if (redirectPreferred) return true;
-    } catch (e) {}
-    return false;
-  }
-
-  let redirectPreferred = false;
-  try { redirectPreferred = localStorage.getItem('admh.sync.redirect') === '1'; } catch (e) {}
-  function rememberRedirect() {
-    redirectPreferred = true;
-    try { localStorage.setItem('admh.sync.redirect', '1'); } catch (e) {}
-  }
-
   function signInGoogle() {
     if (!cfg) cfg = resolveConfig();
     if (!cfg) return Promise.reject(new Error('لم تُضبط إعدادات المزامنة'));
@@ -651,24 +630,11 @@
     return signInWithFirebaseGoogle();
   }
 
+  /** مسار النافذة المنبثقة المباشرة لـ Firebase فقط (تم حذف signInWithRedirect كلياً) */
   function signInWithFirebaseGoogle() {
     return initFirebase().then(() => {
       const provider = googleProvider();
       setState({ busy: true, error: '', errorCode: '' });
-
-      const goRedirect = () => {
-        if (!fb.auth.signInWithRedirect) {
-          const e = new Error('هذا المتصفح لا يدعم إعادة التوجيه. افتح الموقع في Chrome.');
-          e.code = 'auth/operation-not-supported-in-this-environment';
-          throw e;
-        }
-        rememberRedirect();
-        return fb.auth.signInWithRedirect(provider).then(() => {
-          const e = new Error('لم تكتمل إعادة التوجيه إلى Google. افتح الموقع في Chrome أو Safari مباشرةً.');
-          e.code = 'auth/redirect-did-not-navigate';
-          throw e;
-        });
-      };
 
       return fb.auth.signInWithPopup(provider).then(cred => {
         if (cred && cred.user) return cred;
@@ -680,19 +646,14 @@
         });
       }).catch(err => {
         const code = (err && err.code) || '';
-        const recover = () => waitForSession(2500).then(u => (u ? { user: u } : null));
-
-        return recover().then(found => {
+        return waitForSession(2500).then(found => {
           if (found) return found;
 
-          const fallbackable =
-            code === 'auth/popup-blocked' ||
-            code === 'auth/popup-closed-by-user' ||
-            code === 'auth/cancelled-popup-request' ||
-            code === 'auth/operation-not-supported-in-this-environment' ||
-            code === 'auth/web-storage-unsupported' ||
-            code === 'auth/internal-error';
-          if (fallbackable && fb.auth.signInWithRedirect) return goRedirect();
+          if (code === 'auth/popup-blocked' || code === 'auth/operation-not-supported-in-this-environment') {
+            const e = new Error('متصفح الهاتف يحجب النافذة المنبثقة. الرجاء الضغط على (السماح بالنوافذ المنبثقة) في المتصفح ثم أعد المحاولة.');
+            e.code = 'auth/popup-blocked';
+            throw e;
+          }
           throw err;
         });
       });
@@ -946,48 +907,25 @@
       return `هذا النطاق غير مصرّح به في Firebase.\n\nافتح: Firebase ← Authentication ← Settings ← Authorized domains ← Add domain\nوأضف هذا النطاق بالحرف:\n${d || '(انسخ اسم النطاق من شريط العنوان)'}\n\nملاحظة: أضف النطاق وحده بلا https:// ولا مسار.`;
     }
     if (code === 'auth/admin-restricted-operation' || /admin-restricted-operation/i.test(msg)) {
-      return 'العملية مطلوبة غير مُفعَّلة في Firebase. افتح: Authentication ← Sign-in method، وفعّل الطريقة التي تستخدمها (Email/Password أو Google).';
-    }
-    if (code === 'auth/operation-not-allowed' || /operation-not-allowed/i.test(msg)) {
-      return 'تسجيل الدخول بالبريد وكلمة المرور غير مُفعَّل. افتح: Authentication ← Sign-in method ← فعّل Email/Password.';
+      return 'العملية مطلوبة غير مُفعَّلة في Firebase. افتح: Authentication ← Sign-in method، وفعّل الطريقة التي تستخدمها (Google).';
     }
     if (code === 'auth/configuration-not-found' || /configuration-not-found/i.test(msg)) {
       return 'لم تُهيَّأ Authentication بعد. افتح: Firebase ← Authentication ← Get started.';
     }
-    if (code === 'auth/email-already-in-use') {
-      return 'هذا البريد مسجّل مسبقاً بمزوّد دخول آخر (Google غالباً). Firebase لا يسمح ببريد واحد على مزوّدين.';
-    }
-    if (code === 'auth/account-exists-with-different-credential') {
-      return 'هذا البريد مسجّل بمزوّد دخول مختلف. استخدم طريقة الدخول التي أنشأت الحساب أصلاً.';
-    }
-    if (code === 'auth/weak-password') {
-      return 'كلمة المرور ضعيفة — استخدم 6 أحرف على الأقل.';
-    }
-    if (code === 'auth/invalid-email') return 'صيغة البريد الإلكتروني غير صحيحة.';
-    if (code === 'auth/wrong-password' || code === 'auth/invalid-credential'
-        || code === 'auth/invalid-login-credentials' || code === 'auth/user-not-found') {
-      return 'البريد أو كلمة المرور غير صحيحة.';
-    }
     if (code === 'auth/internal-error' || /internal-error/i.test(msg)) {
-      return 'خطأ داخلي من Firebase. افتح الموقع في Chrome مباشرةً وأعد المحاولة.';
+      return 'خطأ داخلي من Firebase. يرجى فتح الموقع في متصفح Chrome والتأكد من السماح بالنوافذ المنبثقة للرابط.';
     }
-    if (code === 'auth/operation-not-supported-in-this-environment') {
-      return 'هذه البيئة لا تدعم نوافذ الدخول المنبثقة. افتح الموقع في متصفح كامل (Chrome أو Safari).';
+    if (code === 'auth/operation-not-supported-in-this-environment' || code === 'auth/popup-blocked') {
+      return 'المتصفح يمنع فتح النافذة المنبثقة للدخول. يرجى الضغط على خيار السماح بالنوافذ المنبثقة لهذا الموقع في المتصفح ثم أعد المحاولة.';
     }
     if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
       return 'أُغلقت نافذة الدخول قبل إتمام العملية. أعد المحاولة.';
     }
-    if (code === 'auth/popup-blocked') {
-      return 'المتصفح منع نافذة الدخول — اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.';
-    }
     if (code === 'gis/popup-closed-no-response') {
-      return 'لم تكتمل نافذة الدخول على هذا الجهاز. النظام بدّل طريقة الدخول تلقائياً — اضغط الزر مرة أخرى.';
+      return 'لم تكتمل نافذة الدخول على هذا الجهاز. أعد المحاولة وسيعمل النظام تلقائياً.';
     }
     if (code === 'auth/too-many-requests') {
       return 'محاولات كثيرة فاشلة. انتظر بضع دقائق ثم أعد المحاولة.';
-    }
-    if (code === 'auth/requires-recent-login') {
-      return 'تحتاج إلى إعادة الدخول لتنفيذ هذه العملية.';
     }
     if (code === 'permission-denied' || /insufficient permissions/i.test(msg)) {
       return 'رفض الخادم العملية — قواعد أمان Firestore غير منشورة.';
@@ -999,9 +937,6 @@
         || /offline/i.test(msg) || /network/i.test(msg)) {
       return 'تعذّر الوصول إلى Firebase — تحقق من اتصال الإنترنت.';
     }
-    if (/firebase/i.test(msg) && /load|fetch|import/i.test(msg)) {
-      return 'تعذّر تحميل مكتبة Firebase — تحقق من الاتصال بالإنترنت.';
-    }
     return msg || 'خطأ غير معروف';
   }
 
@@ -1012,7 +947,6 @@
     ensureInit();
     setState({ busy: true, error: '', errorCode: '' });
 
-    // تصحيح الخطأ الرابع: إرجاع الطلب المباشر فوراً بلا ربط بدالة prepareGoogle التكرارية
     if (googleReady() && !gisDisabled) {
       return startGisRequest().then(cred => {
         const user = (cred && cred.user) || cred;
@@ -1093,7 +1027,6 @@
           consumeRedirect().then(user => {
             if (user) { resolve(true); return; }
             let settled = false;
-            // تصحيح الخطأ الثاني: تعريف المتغير مسبقاً لمنع السباق المتزامن
             let unsub;
             unsub = fb.auth.onAuthStateChanged(u => {
               if (settled) return;
