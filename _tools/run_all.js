@@ -37,6 +37,7 @@ const GROUPS = [
   { file: 'account_guard_test.js', browser: false, what: 'حماية البيانات المحلية عند تبديل الحساب' },
   { file: 'sw_test.js',            browser: false, what: 'استراتيجية تخزين عامل الخدمة' },
   { file: 'domain_test.js',        browser: false, what: 'ذكر النطاق الحقيقي في الرسائل' },
+  { file: 'assetsignore_test.js',  browser: false, what: 'أنماط .assetsignore تستثني الصحيح وتُبقي المهم' },
 
   /* --- متصفح حقيقي --- */
   { file: 'notables_test.js',      browser: true,  what: 'النطاق، العنوان التلقائي، خلوّ Word من الجداول' },

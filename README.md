@@ -248,6 +248,50 @@ python -m http.server 8080
 
 ---
 
+## ⚠️ عطل النشر: «Asset too large» — وحلّه
+
+إذا ظهر في سجل النشر:
+
+```
+✘ [ERROR] Asset too large.
+  We found a file /opt/buildhome/repo/node_modules/workerd/bin/workerd
+  with a size of 129 MiB. Workers supports assets up to 25 MiB.
+```
+
+**السبب:** إضافة `package.json` تجعل Cloudflare يكتشف المشروع كـ«Worker» ويُشغّل
+`bun install` تلقائياً. فيُنشأ `node_modules` — وفيه `workerd` بحجم **١٢٩ ميجابايت** —
+داخل مجلد الأصول، فيرفض `wrangler` رفعه.
+
+**والأهم:** `wrangler` يقرأ `.assetsignore` من **جذر مجلد الأصول** (وهو الجذر هنا).
+فكل ما يلزم هو استثناء `node_modules` فيه — وقد فُعل.
+
+### كيف تتحقق قبل الرفع؟
+
+```bash
+node _tools/deploy_check.js
+```
+
+يُحاكي ما سيراه `wrangler` بعد تطبيق `.assetsignore`، ويُبلّغ عن:
+- أي ملف يتجاوز **٢٥ ميجابايت** (سبب فشل النشر)
+- أي ملف أساسي **لن يُرفع** (سبب تعطّل التطبيق)
+- مجلدات ثقيلة ستُرفع (للتنبيه)
+
+ويُشغَّل تلقائياً مع `npm run check`.
+
+### القاعدة العامة
+
+| ما يُستثنى | لماذا |
+|---|---|
+| `node_modules` · `.wrangler` · `dist` · `build` | مخرجات بناء لا تخصّ الزائر |
+| `_tools` · `.github` · `wrangler.jsonc` · `package.json` | أدوات وإعداد |
+| `نماذج` · `*.docx` · `*.pdf` · `*.xlsx` | **تقارير العمل الحقيقية** |
+| `*.md` · `.git` · `.gitignore` · `.assetsignore` | توثيق وتاريخ |
+
+> **وإياك أن تُخرج `_headers` أو `manifest.webmanifest` أو `sw.js`** — التطبيق
+> يعتمد عليها (رؤوس الأمان، التثبيت، والعمل بلا إنترنت).
+
+---
+
 ## النشر على Cloudflare Pages
 
 ### 1) ارفع المشروع إلى مستودع GitHub **خاص**

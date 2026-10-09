@@ -1,17 +1,61 @@
 # =============================================================================
-# منع رفع ملفات لا يجب نشرها إلى Cloudflare Pages
-# (يُقرأ عند النشر المباشر بـ wrangler pages deploy)
+# منع رفع ملفات لا يجب نشرها إلى Cloudflare
+# (يُقرأ عند النشر بـ wrangler deploy و wrangler pages deploy)
 #
-# تنبيه مهم: مجلد «نماذج» يحتوي على تقارير حقيقية فيها أسماء موظفين.
+# تنبيه مهم: مجلد «نماذج» يحتوي تقارير حقيقية فيها أسماء موظفين.
 # لا يجوز نشرها على أي استضافة عامة تحت أي ظرف.
 # =============================================================================
 
-_tools
+# --- تقارير العمل الحقيقية: ممنوعة دائماً ---
 نماذج
-.git
-.gitignore
-.assetsignore
-README.md
+نماذج/**
 *.docx
 *.pdf
+*.xlsx
+
+# --- أدوات التطوير والاختبار ---
+_tools
+_tools/**
+
+# --- ما يُنشئه البناء ولا يجوز رفعه ---
+# عطل حقيقي: إضافة package.json جعلت Cloudflare يُشغّل `bun install`،
+# فنشأ node_modules وفيه workerd بحجم ١٢٩ ميجابايت — أكبر من حدّ ٢٥ ميجابايت.
+node_modules
+node_modules/**
+.wrangler
+.wrangler/**
+dist
+dist/**
+build
+build/**
+
+# --- ملفات إعداد لا تخصّ الزائر ---
+.git
+.git/**
+.github
+.github/**
+.gitignore
+.assetsignore
+.wranglerignore
+wrangler.jsonc
+wrangler.toml
+wrangler.lock
+package.json
+package.json.*
+package-lock.json
+bun.lock
+bun.lockb
+yarn.lock
+README.md
+*.md
 *.checks.json
+*.log
+
+# --- ملفات نظام التشغيل والمحرّر ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode
+.idea
+*.swp
+*~

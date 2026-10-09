@@ -24,8 +24,9 @@
     "test:unit": "node _tools/run_all.js --group unit",
     "test:browser": "node _tools/run_all.js --group browser",
     "lint:syntax": "node _tools/syntax_check.js",
-    "check": "npm run lint:syntax && npm test",
-    "serve": "node _tools/serve.js"
+    "check": "npm run lint:syntax && npm run check:deploy && npm test",
+    "serve": "node _tools/serve.js",
+    "check:deploy": "node _tools/deploy_check.js"
   },
   "devDependencies": {},
   "comments": {

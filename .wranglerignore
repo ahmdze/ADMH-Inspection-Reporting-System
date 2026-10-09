@@ -1,0 +1,63 @@
+# =============================================================================
+# حماية احتياطية أثناء النشر — .wranglerignore
+# =============================================================================
+# wrangler يقرأ .assetsignore من جذر مجلد الأصول، وهو الملف الأساسي.
+# هذا الملف طبقة ثانية: بعض إعدادات Cloudflare تُشغّل `bun install` أو
+# `npm install` تلقائياً عند وجود package.json، فينشأ node_modules داخل
+# مجلد الأصول ويفشل الرفع:
+#     ✘ [ERROR] Asset too large. ... workerd ... 129 MiB
+# فتأخّر الرفع دقيقتين ثم يفشل. وجود هذه الطبقة يمنع التكرار إن تغيّرت
+# سلوكيات القراءة في إصدار wrangler مستقبلي.
+#
+# لا تحذف أياً من هذه الأسطر.
+# =============================================================================
+
+# مخرجات التثبيت والبناء — لا تخصّ الزائر إطلاقاً
+node_modules
+node_modules/**
+.wrangler
+.wrangler/**
+dist
+dist/**
+build
+build/**
+
+# أدوات التطوير
+_tools
+_tools/**
+.github
+.github/**
+
+# تقارير العمل الحقيقية — ممنوعة دائماً
+نماذج
+نماذج/**
+*.docx
+*.pdf
+*.xlsx
+
+# إعداد وتوثيق
+.git
+.git/**
+.gitignore
+.assetsignore
+.wranglerignore
+wrangler.jsonc
+wrangler.toml
+package.json
+package.json.*
+package-lock.json
+bun.lock
+bun.lockb
+yarn.lock
+README.md
+*.md
+*.log
+*.checks.json
+
+# نظام التشغيل والمحرّر
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+*.swp
+*~
