@@ -82,6 +82,8 @@ function buildModel() {
   if (t(r.families)) staffRows.push(`عدد العوائل المسجلة: ${normalizeDigits(r.families)}`);
   if (staffRows.length) M.sections.push({ type: 'list', heading: 'الملاك الكلي والفعلي', items: staffRows, numbered: false });
 
+  M.sections.push({ type: 'heading', heading: 'المحور الاداري/' });
+
   /* أولاً: وحدة البصمة */
   const fp = r.fp;
   const fpRows = [];

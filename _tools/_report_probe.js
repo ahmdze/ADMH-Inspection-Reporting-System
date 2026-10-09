@@ -46,6 +46,7 @@ function __reportTest() {
     R.visitType = 'زيارة تفتيشية';
     R.officials = [{ role: 'مدير المركز', job: 'طبيب', name: 'فلان الفلاني' }];
     R.staff = { 'الملاك': { total: '55', actual: '32' } };
+    R.fp.managerName = 'مسؤول البصمة';
     R.records = [{ name: 'سجل الحركة', evalList: ['مُدام وموثق ومحدّث.'], evalManual: '', eval: '' }];
     R.recGroups = [{ letter: 'أ', label: 'شعبة التحقيقات / قسمنا', intro: '', items: ['تشكيل لجنة تحقيقية.'] }];
     R.signers = [{ name: 'عضو فريق التفتيش', job: 'ضابط تفتيش', date: '2026-09-22' }];
@@ -79,6 +80,17 @@ function __reportTest() {
       staffSec && /النفوس/.test(staffSec.items[staffSec.items.length - 2] || '') &&
       /العوائل/.test(staffSec.items[staffSec.items.length - 1] || ''),
       staffSec && staffSec.items.slice(-2));
+    var adminHeadingIndex = (M.sections || []).findIndex(function (s) { return s.heading === 'المحور الاداري/'; });
+    var fingerprintIndex = (M.sections || []).findIndex(function (s) { return s.heading === 'أولاً: وحدة البصمة'; });
+    check('administrative heading follows staff and precedes fingerprint section',
+      adminHeadingIndex > (M.sections || []).indexOf(staffSec) && adminHeadingIndex < fingerprintIndex,
+      { adminHeadingIndex: adminHeadingIndex, fingerprintIndex: fingerprintIndex });
+    check('administrative heading appears in plain text in the expected order',
+      (function () {
+        var plain = NS.buildPlainText(M);
+        return plain.indexOf('عدد العوائل المسجلة: 3120') < plain.indexOf('المحور الاداري/') &&
+          plain.indexOf('المحور الاداري/') < plain.indexOf('أولاً: وحدة البصمة');
+      })());
 
     /* ---------- (٤) الاسم يظهر مع العنوان الوظيفي ---------- */
     var offSec = (M.sections || []).filter(function (s) { return s.heading === 'بيانات المؤسسة'; })[0];
