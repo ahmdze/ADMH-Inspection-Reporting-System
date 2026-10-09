@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '21.0.0';
+const APP_VERSION = '22.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1557,21 +1557,38 @@ function bindButtons() {
     if (!confirm('حذف سجل تعديلات هذا التقرير؟ لن تتأثر النسخ المحفوظة في الأرشيف.')) return;
     if (dropHistory(state.report.id)) { toast('حُذف السجل', 'ok'); renderHistoryView(); }
   });
+  /* نقل قاعدة البيانات: رفع / تنزيل */
+  bindOn('#btnUploadDb', () => openTransfer('upload'));
+  bindOn('#btnDownloadDb', () => openTransfer('download'));
+  bindOn('#btnTransferGo', () => runTransfer());
+
+  /* المسودات */
+  bindOn('#btnDrafts', () => openDrafts());
+  bindOn('#btnDraftsRefresh', () => renderDrafts());
+  bindOn('#btnDraftsExport', () => exportCurrentDraft());
+  (function () {
+    const box = $('#draftsBody');
+    if (!box) return;
+    box.addEventListener('click', (e) => {
+      if (e.target.closest('[data-draftopen]')) { openCurrentDraft(); return; }
+      if (e.target.closest('[data-draftexport]')) { exportCurrentDraft(); return; }
+      handleHistoryClick(e);
+    });
+  })();
+
+  /* التوصيات: تحديث وتصدير */
+  bindOn('#btnRecRefresh', () => {
+    rebuildRegistry();
+    renderRecs();
+    toast('حُدّثت التوصيات من التقارير', 'ok');
+  });
+  bindOn('#btnRecExport', () => exportRecsCsv());
+
   /* أزرار اللقطات — تفويض على الحاوي (تتغيّر مع كل رسم) */
   (function () {
     const box = $('#histList');
     if (!box) return;
-    box.addEventListener('click', (e) => {
-      const v = e.target.closest('[data-histview]');
-      if (v) { previewHistory(v.getAttribute('data-histview')); return; }
-      const r = e.target.closest('[data-histrestore]');
-      if (r) {
-        const id = r.getAttribute('data-histrestore');
-        if (confirm('استعادة هذه النسخة؟ سيُحفظ وضعك الحالي كنسخة أولاً فلا تفقد شيئاً.')) {
-          restoreHistory(id);
-        }
-      }
-    });
+    box.addEventListener('click', handleHistoryClick);
   })();
 
   /* الأرشيف */
@@ -1900,12 +1917,37 @@ function verifyBindings() {
   'newSave', 'newDiscard',
   'btnSaveGClient', 'btnPasteGClient',
     'btnListAdd', 'btnListReset', 'listPicker',
+    /* التوصيات */
+    'btnRecAdd', 'btnRecRefresh', 'btnRecExport', 'btnPullPrevRecs',
+    /* سجل التعديلات */
+    'btnHistNow', 'btnHistClear',
+    /* ملف المؤسسة */
+    'btnFacClose', 'btnFacSaveNotes', 'btnFacNewVisit',
+    /* لوحة المؤشرات */
+    'btnDashApply', 'btnDashPrint',
+    /* نقل قاعدة البيانات والمسودات */
+    'btnUploadDb', 'btnDownloadDb', 'btnTransferGo',
+    'btnDrafts', 'btnDraftsRefresh', 'btnDraftsExport',
     'bulkFillEmpty', 'bulkFillAll'];
+
+  /* ---------------------------------------------------------------------
+     ما هو «معالج» لكل عنصر؟
+     ---------------------------------------------------------------------
+     كان الفحص يطلب `onclick` من **كل** عنصر، فأنتج إنذاراً كاذباً:
+         [verifyBindings] أزرار بلا معالج: listPicker
+     لأن `listPicker` قائمة منسدلة تُربط بـ`onchange` لا `onclick`.
+
+     الفحص الصحيح حسب نوع العنصر:
+       · <select>  → onchange
+       · <button>  → onclick
+     --------------------------------------------------------------------- */
   const missing = must.filter(id => {
     const el = document.getElementById(id);
-    return !el || typeof el.onclick !== 'function';
+    if (!el) return true;
+    const prop = (el.tagName === 'SELECT') ? 'onchange' : 'onclick';
+    return typeof el[prop] !== 'function';
   });
-  if (missing.length) console.warn('[verifyBindings] أزرار بلا معالج:', missing.join(', '));
+  if (missing.length) console.warn('[verifyBindings] عناصر بلا معالج:', missing.join(', '));
   return missing;
 }
 function bulkApply(overwrite) {
@@ -2927,9 +2969,25 @@ function renderSyncUI(st) {
         ? `متصل — ${st.email || 'مستخدم'}`
         : 'الإعدادات محفوظة لكن الدخول غير مُنفَّذ. اضغط «تفعيل المزامنة والدخول» أو «مزامنة الآن».';
     }
-    setText('#syncStateText', st.busy ? 'جاري المزامنة…' : st.connected ? 'متصل ✓' : 'غير متصل');
+    setText('#syncStateText', st.busy ? 'جاري…' : st.connected ? 'متصل ✓' : 'غير متصل');
     setText('#syncLastText', st.lastSync ? new Date(st.lastSync).toLocaleString('ar-IQ') : 'لم تتم بعد');
     setText('#syncDeviceText', st.device || '—');
+
+    /* -----------------------------------------------------------------
+       تلميحات النقل: كم على هذا الجهاز، ومتى آخر عملية
+       -----------------------------------------------------------------
+       الغرض أن يعرف المستخدم **قبل** أن يضغط: ما الذي سيُستبدل.
+       ----------------------------------------------------------------- */
+    const lastTxt = st.lastSync ? new Date(st.lastSync).toLocaleString('ar-IQ') : 'لم تحدث بعد';
+    setText('#uploadHint', 'المحلي: ' + state.reports.length + ' تقريراً · آخر عملية: ' + lastTxt);
+    setText('#downloadHint', 'سيحلّ محلّ ' + state.reports.length + ' تقريراً محلياً · آخر عملية: ' + lastTxt);
+    setText('#syncLastSmart', st.lastSync ? ('آخر مزامنة: ' + lastTxt) : '');
+
+    /* نُعطّل الأزرار إن لم يكن هناك اتصال */
+    ['#btnUploadDb', '#btnDownloadDb'].forEach(sel => {
+      const b = $(sel);
+      if (b) b.disabled = !st.connected || !!st.busy;
+    });
 
     const ed = $('#syncConfigEdit');
     if (ed && document.activeElement !== ed) {
@@ -3555,23 +3613,41 @@ function bindFollowUps() {
      لا click — فلو اعتمدنا على bindOn لضاعت كل تعديلات المستخدم بصمت.
      لذلك نستمع إلى الحدثين معاً عبر addEventListener.
      --------------------------------------------------------------------- */
+  /* ---------------------------------------------------------------------
+     تعديل توصية: الحالة والموعد والحقول النصية.
+     ---------------------------------------------------------------------
+     عطل حقيقي كان يحدث: كنّا نستمع إلى `click` أيضاً، فيصل النقر على
+     <select> إلى المعالج **قبل** أن تفتح القائمة المنسدلة — فيُحفظ الوضع
+     الحالي ويظهر إشعار «حالة التوصية: لم تبدأ»، والقائمة لا تُفتح إطلاقاً.
+
+     القاعدة الصحيحة:
+       · `change` للقوائم وحقول التاريخ والحقول النصية — وهو ما يعنيه
+         «تغيّرت القيمة» فعلاً.
+       · `input` **لن نستخدمه**: يتكرّر مع كل حرف في الحقول النصية.
+       · `click` **ممنوع**: يبتلع النقر الذي يفتح القائمة.
+     --------------------------------------------------------------------- */
   ['#recList', '#facRecs'].forEach(sel => {
     const box = $(sel);
     if (!box) return;
     box.addEventListener('change', handleRecEdit);
-    box.addEventListener('input', handleRecEdit);
-    box.addEventListener('click', handleRecEdit);
+    /* الحذف زر، فلا يصلح له حدث change */
+    box.addEventListener('click', handleRecDelete);
   });
 
-  /* إضافة توصية يدوية */
+  /* إضافة توصية يدوية — الزر داخل نافذة التوصيات */
   bindOn('#btnRecAdd', () => {
     const reg = readRegistry();
     const R2 = REG();
     const txt = prompt('نص التوصية الجديدة:');
     if (!txt || !txt.trim()) return;
-    const facKey = prompt('مفتاح المؤسسة (اتركه فارغاً لتوصية عامة):') || '';
-    const id = R2.addManualRec(reg, facKey, txt, prompt('الجهة المسؤولة (اختياري):') || '');
-    if (id && writeRegistry(reg)) { toast('أُضيفت التوصية', 'ok'); renderRecs(); }
+    const facKey = ($('#recFilterFac') || {}).value || '';
+    const owner = prompt('الجهة المسؤولة (اختياري):') || '';
+    const id = R2.addManualRec(reg, facKey, txt, owner);
+    if (id && writeRegistry(reg)) {
+      toast('أُضيفت التوصية', 'ok');
+      renderRecs();
+      if (openFacilityKey) openFacility(openFacilityKey);
+    }
   });
 
   /* لوحة المؤشرات */
@@ -3610,13 +3686,23 @@ function handleRecEdit(e) {
   if (!R) return;
   const reg = readRegistry();
 
+  /* ---------------------------------------------------------------------
+     الحالة: تُحفظ عند تغيّر القيمة فقط.
+     ---------------------------------------------------------------------
+     كنا نستمع إلى `click` أيضاً، فيصل النقر الذي **يفتح** القائمة إلى هنا
+     قبل أن تُفتح، فيُحفظ الوضع الحالي ويظهر «حالة التوصية: لم تبدأ».
+     الآن نتعامل مع `change` وحده.
+     --------------------------------------------------------------------- */
   const sel = e.target.closest('[data-recstatus]');
   if (sel) {
     const id = sel.getAttribute('data-recstatus');
-    R.updateRec(reg, id, { status: sel.value });
+    const value = sel.value;
+    /* لا تغيير فعلي؟ لا نحفظ ولا نُشعر */
+    if (reg.recs[id] && reg.recs[id].status === value) return;
+    R.updateRec(reg, id, { status: value });
     if (writeRegistry(reg)) {
-      const st = R.statusOf(sel.value);
-      toast(`حالة التوصية: ${st.t}`, 'ok', 2200);
+      const st = R.statusOf(value);
+      toast('حالة التوصية: ' + st.t, 'ok', 2200);
       renderRecs();
       if (openFacilityKey) openFacility(openFacilityKey);
       renderDash();
@@ -3627,23 +3713,22 @@ function handleRecEdit(e) {
   const due = e.target.closest('[data-recDue]');
   if (due) {
     const id = due.getAttribute('data-recDue');
-    R.updateRec(reg, id, { dueDate: due.value || null });
-    if (writeRegistry(reg)) { renderRecs(); renderFacilities(); }
+    const value = due.value || null;
+    if (reg.recs[id] && (reg.recs[id].dueDate || null) === value) return;
+    R.updateRec(reg, id, { dueDate: value });
+    if (writeRegistry(reg)) { renderRecs(); renderFacilities(); renderDash(); }
     return;
   }
 
-  /* حقول النص: تُحفظ عند الخروج من الحقل.
-     نمنع التسجيل المزدوج لأننا نستمع إلى input وchange وclick معاً،
-     فـinput يتكرّر مع كل حرف. */
+  /* الحقول النصية: تُحفظ عند مغادرة الحقل (change)، لا مع كل حرف */
   const txtField = e.target.closest('[data-recOwner],[data-recEvidence],[data-recNote]');
-  if (txtField && e.type === 'change') {
+  if (txtField) {
     const map = { recOwner: 'owner', recEvidence: 'evidence', recNote: 'note' };
     for (const attr in map) {
       if (txtField.hasAttribute('data-' + attr)) {
         const id = txtField.getAttribute('data-' + attr);
         const val = tidy(txtField.value);
-        const reg2 = readRegistry();
-        if (reg2.recs[id] && reg2.recs[id][map[attr]] === val) return;   /* لا تغيير */
+        if (reg.recs[id] && reg.recs[id][map[attr]] === val) return;   /* لا تغيير */
         R.updateRec(reg, id, { [map[attr]]: val });
         writeRegistry(reg);
         return;
@@ -3651,6 +3736,7 @@ function handleRecEdit(e) {
     }
   }
 
+  /* حذف توصية يدوية: النقر هو الحدث الصحيح هنا — فهو زر لا قائمة */
   const del = e.target.closest('[data-recDel]');
   if (del) {
     const id = del.getAttribute('data-recDel');
@@ -3661,6 +3747,318 @@ function handleRecEdit(e) {
       renderDash();
     }
   }
+}
+
+/**
+ * حذف توصية يدوية — مربوط على حدث النقر لأنه زر.
+ * فُصل عن handleRecEdit لأن ذاك يخصّ أحداث «تغيّرت القيمة».
+ */
+function handleRecDelete(e) {
+  const R = REG();
+  if (!R) return;
+  const del = e.target.closest('[data-recDel]');
+  if (!del) return;
+  const reg = readRegistry();
+  const id = del.getAttribute('data-recDel');
+  if (!confirm('حذف هذه التوصية اليدوية؟')) return;
+  if (R.removeRec(reg, id) && writeRegistry(reg)) {
+    toast('حُذفت التوصية', 'ok');
+    renderRecs();
+    if (openFacilityKey) openFacility(openFacilityKey);
+    renderDash();
+  }
+}
+
+/* =============================================================================
+   نقل قاعدة البيانات — رفع أو تنزيل، بتأكيد صريح
+   =============================================================================
+   لا مزامنة تلقائية دمجية. المستخدم يقرّر متى يرفع ومتى ينزّل، ومن أي جهاز.
+   وكل عملية **استبدال كامل**، لذا نطلب تأكيداً مكتوباً قبل التنفيذ.
+   ============================================================================= */
+let pendingTransfer = null;      /* 'upload' | 'download' */
+
+/** يفتح نافذة تأكيد النقل */
+function openTransfer(kind) {
+  const S = sync.available() ? sync.get() : null;
+  if (!S || !S.status().connected) {
+    toast('ادخل بحساب Google أولاً', 'warn');
+    return;
+  }
+
+  pendingTransfer = kind;
+  const isUp = kind === 'upload';
+  const modal = $('#transferModal');
+  if (!modal) return;
+
+  const localCount = state.reports.length;
+  const word = isUp ? 'رفع' : 'تنزيل';
+
+  $('#trTitle').textContent = isUp ? '⬆️ تأكيد رفع قاعدة البيانات' : '⬇️ تأكيد تنزيل قاعدة البيانات';
+  $('#trWord').textContent = word;
+
+  const body = [];
+  if (isUp) {
+    body.push('<p>سيُرفع <b>ما على هذا الجهاز</b> إلى حسابك:');
+    body.push('<ul>');
+    body.push('<li><b>' + localCount + '</b> تقريراً في الأرشيف</li>');
+    body.push('<li>الإعدادات ومكتبة العبارات والقوائم</li>');
+    body.push('<li>سجل المؤسسات والتوصيات</li>');
+    body.push('</ul>');
+    body.push('<p class="warnbox">⚠️ سيُستبدل ما في السحابة بالكامل. ' +
+      'إن كان على جهاز آخر عملٌ لم يُرفع فسيضيع — ارفع منه أولاً إن أردته.</p>');
+  } else {
+    body.push('<p>سيُنزَّل <b>ما في حسابك</b> إلى هذا الجهاز:');
+    body.push('<ul>');
+    body.push('<li>التقارير المحفوظة في السحابة</li>');
+    body.push('<li>الإعدادات ومكتبة العبارات والقوائم</li>');
+    body.push('<li>سجل المؤسسات والتوصيات والمسودة</li>');
+    body.push('</ul>');
+    body.push('<p class="warnbox">⚠️ سيُستبدل ما على هذا الجهاز بالكامل، وفيه <b>' +
+      localCount + '</b> تقريراً. صدّر نسخة احتياطية أولاً إن أردت الاحتفاظ بها.</p>');
+  }
+  $('#trBody').innerHTML = body.join('');
+
+  const input = $('#trConfirm');
+  input.value = '';
+  const go = $('#btnTransferGo');
+  go.disabled = true;
+  /* لا يُفعَّل الزر إلا بكتابة الكلمة بدقة — حماية من النقر العابر */
+  input.oninput = () => { go.disabled = tidy(input.value) !== word; };
+
+  openModal(modal);
+  setTimeout(() => input.focus(), 120);
+}
+
+/** ينفّذ النقل المؤكَّد */
+function runTransfer() {
+  const S = sync.available() ? sync.get() : null;
+  if (!S || !pendingTransfer) return;
+  const kind = pendingTransfer;
+  pendingTransfer = null;
+
+  const modal = $('#transferModal');
+  if (modal) closeModal(modal);
+
+  const btn = $('#btn' + (kind === 'upload' ? 'UploadDb' : 'DownloadDb'));
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ جارٍ…'; }
+
+  /* لقطة في السجل قبل أي استبدال — فلا يضيع العمل الحالي */
+  recordHistory(kind === 'upload' ? 'قبل الرفع' : 'قبل التنزيل', true);
+
+  const work = (kind === 'upload') ? S.uploadDatabase() : S.downloadDatabase();
+
+  work.then(r => {
+    if (kind === 'upload') {
+      toast('⬆️ رُفعت قاعدة البيانات: ' + r.reports + ' تقريراً', 'ok', 6000);
+    } else {
+      const parts = [r.reports + ' تقريراً'];
+      if (r.hasSettings) parts.push('الإعدادات');
+      if (r.hasLibrary) parts.push('المكتبة');
+      if (r.hasLists) parts.push('القوائم');
+      if (r.hasRegistry) parts.push('سجل التوصيات');
+      toast('⬇️ نُزّلت قاعدة البيانات: ' + parts.join(' · '), 'ok', 6000);
+    }
+    rebuildRegistry();
+    renderAll();
+    refreshArchiveMeta();
+    renderArchive();
+    renderSyncUI(S.status());
+    renderHistoryView();
+  }).catch(e => {
+    toast('فشل النقل: ' + (e && e.message ? e.message : ''), 'err', 9000);
+    renderSyncUI(S.status());
+  }).then(() => {
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  });
+}
+
+/* =============================================================================
+   المسودات
+   =============================================================================
+   المسودة الحالية محفوظة محلياً وتُزامَن. وهذه النافذة تعرضها مع سجل نسخها.
+   ============================================================================= */
+function openDrafts() {
+  const modal = $('#draftsModal');
+  if (!modal) return;
+  renderDrafts();
+  openModal(modal);
+}
+
+/** يرسم محتوى نافذة المسودات */
+function renderDrafts() {
+  const box = $('#draftsBody');
+  if (!box) return;
+
+  const draft = jread(LS_DRAFT, null);
+  const H = HIST();
+  const hist = H ? readHistory() : { reports: {} };
+  const out = [];
+
+  /* ---------- المسودة الحالية ---------- */
+  out.push('<h4 style="margin:0 0 6px">المسودة الحالية</h4>');
+  if (!draft || !draft.report) {
+    out.push('<p class="empty">لا مسودة محفوظة.</p>');
+  } else {
+    const r = draft.report;
+    const when = draft.at ? fmtDate(new Date(draft.at).toISOString().slice(0, 10)) : '';
+    const saved = state.reports.some(x => x.id === r.id);
+    out.push('<div class="hist">');
+    out.push('<div class="top">');
+    out.push('<span class="when">' + esc(when) + '</span>');
+    out.push('<span class="badge ' + (saved ? 'done' : 'histb') + '">' +
+      (saved ? 'محفوظة في الأرشيف' : 'غير محفوظة') + '</span>');
+    out.push('<span class="grow"></span>');
+    if (r.id !== state.report.id) {
+      out.push('<button class="btn ghost sm" data-draftopen="1" type="button">↩ فتحها</button>');
+    } else {
+      out.push('<span class="hint">مفتوحة الآن</span>');
+    }
+    out.push('<button class="btn ghost sm" data-draftexport="1" type="button">⬇️ تصدير</button>');
+    out.push('</div>');
+    out.push('<div class="meta"><b>' + esc(r.title || autoTitle(r) || 'بدون عنوان') + '</b></div>');
+    out.push('<div class="chg">' + describeReport(r) + '</div>');
+    out.push('</div>');
+  }
+
+  /* ---------- نسخ المسودة من سجل التعديلات ---------- */
+  const list = (state.report && H) ? H.listFor(hist, state.report.id) : [];
+  out.push('<h4 style="margin:14px 0 6px">نسخ محفوظة لهذا التقرير <span class="pill">' +
+    list.length + '</span></h4>');
+  if (!list.length) {
+    out.push('<p class="empty">لا نسخ بعد. تُسجَّل نسخة تلقائياً كل دقيقة تقريباً وعند الحفظ.</p>');
+  } else {
+    list.forEach(e => {
+      const d = new Date(e.at);
+      const when = isNaN(d.getTime()) ? '' :
+        fmtDate(e.at.slice(0, 10)) + ' — ' +
+        String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+      out.push('<div class="hist">');
+      out.push('<div class="top">');
+      out.push('<span class="when">' + esc(when) + '</span>');
+      out.push('<span class="badge histb">' + esc(e.reason || 'تعديل') + '</span>');
+      out.push('<span class="grow"></span>');
+      out.push('<button class="btn ghost sm" data-histview="' + esc(e.id) + '" type="button">👁️ عرض</button>');
+      out.push('<button class="btn warn sm" data-histrestore="' + esc(e.id) + '" type="button">↩ استعادة</button>');
+      out.push('</div>');
+      out.push('<div class="meta">' + esc(e.title || e.facility || 'بدون عنوان') + '</div>');
+      out.push('</div>');
+    });
+  }
+
+  box.innerHTML = out.join('');
+}
+
+/** يصف تقريراً بسطر مختصر: ما مُلئ فعلاً */
+function describeReport(r) {
+  if (!r) return '';
+  const bits = [];
+  if (tidy(r.facilityName)) bits.push('المؤسسة: ' + tidy(r.facilityName));
+  if (tidy(r.visitType)) bits.push(tidy(r.visitType));
+  const recs = (r.recGroups || []).reduce((n, g) => n + (g.items || []).filter(tidy).length, 0);
+  if (recs) bits.push(recs + ' توصية');
+  const rows = (r.records || []).filter(x => tidy(x.name)).length;
+  if (rows) bits.push(rows + ' سجل');
+  const procs = (r.procedures || []).filter(p => p && (tidy(p.date) || tidy(p.note))).length;
+  if (procs) bits.push(procs + ' إجراء');
+  const offs = (r.officials || []).filter(o => tidy(o.name)).length;
+  if (offs) bits.push(offs + ' مسؤول');
+  const sigs = (r.signers || []).filter(s => tidy(s.name)).length;
+  if (sigs) bits.push(sigs + ' موقّع');
+  if (!bits.length) return '<span class="hint">فارغة</span>';
+  return bits.map(b => '<span class="pill">' + esc(b) + '</span>').join(' ');
+}
+
+/** يفتح المسودة الحالية في المحرّر */
+function openCurrentDraft() {
+  const draft = jread(LS_DRAFT, null);
+  if (!draft || !draft.report) { toast('لا مسودة محفوظة', 'warn'); return; }
+  recordHistory('قبل فتح المسودة', true);
+  state.report = migrate(draft.report);
+  state.editingId = draft.editingId || state.report.id;
+  renderAll();
+  showView('report');
+  const modal = $('#draftsModal');
+  if (modal) closeModal(modal);
+  toast('فُتحت المسودة', 'ok');
+}
+
+/** يصدّر المسودة الحالية ملفاً */
+function exportCurrentDraft() {
+  const draft = jread(LS_DRAFT, null);
+  if (!draft || !draft.report) { toast('لا مسودة محفوظة', 'warn'); return; }
+  const r = draft.report;
+  const name = 'مسودة-' + safeName(r.facilityName || r.title || 'تقرير') + '.json';
+  download(new Blob([JSON.stringify(draft, null, 2)], { type: 'application/json' }), name);
+  toast('نُزّلت المسودة', 'ok');
+}
+
+/**
+ * يعالج نقرات سجل التعديلات: عرض لقطة أو استعادتها.
+ * دالة واحدة تُستخدم من لوحة السجل ومن نافذة المسودات.
+ */
+function handleHistoryClick(e) {
+  const v = e.target.closest('[data-histview]');
+  if (v) { previewHistory(v.getAttribute('data-histview')); return; }
+  const r = e.target.closest('[data-histrestore]');
+  if (r) {
+    const id = r.getAttribute('data-histrestore');
+    if (confirm('استعادة هذه النسخة؟ سيُحفظ وضعك الحالي كنسخة أولاً فلا تفقد شيئاً.')) {
+      restoreHistory(id);
+      const modal = $('#draftsModal');
+      if (modal && !modal.classList.contains('hidden')) renderDrafts();
+    }
+  }
+}
+
+/**
+ * يصدّر التوصيات ملف CSV يفتح في Excel.
+ * نُضيف BOM ليقرأ Excel العربية بشكل صحيح.
+ */
+function exportRecsCsv() {
+  const R = REG();
+  if (!R) { toast('وحدة التوصيات غير محمّلة', 'err'); return; }
+
+  const reg = readRegistry();
+  const facs = R.buildFacilities(state.reports);
+  const rows = Object.keys(reg.recs).map(k => reg.recs[k]);
+
+  if (!rows.length) { toast('لا توصيات للتصدير', 'warn'); return; }
+
+  const esc2 = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const lines = [];
+
+  lines.push([
+    'الرقم', 'المؤسسة', 'القطاع', 'نص التوصية', 'الحالة',
+    'الجهة المسؤولة', 'تاريخ الزيارة', 'موعد الإنجاز', 'أيام التأخير',
+    'دليل المعالجة', 'ملاحظة المتابعة', 'تاريخ التحقق',
+  ].map(esc2).join(','));
+
+  rows.sort((a, b) => String(b.visitDate || '').localeCompare(String(a.visitDate || '')))
+    .forEach(rec => {
+      const f = facs[rec.facilityKey];
+      const days = R.daysOverdue(rec);
+      lines.push([
+        rec.id,
+        (f && f.name) || '',
+        (f && f.sector) || '',
+        rec.text,
+        R.statusOf(rec.status).t,
+        rec.owner || '',
+        rec.visitDate ? String(rec.visitDate).slice(0, 10) : '',
+        rec.dueDate ? String(rec.dueDate).slice(0, 10) : '',
+        days ? String(days) : '',
+        rec.evidence || '',
+        rec.note || '',
+        rec.verifiedAt ? String(rec.verifiedAt).slice(0, 10) : '',
+      ].map(esc2).join(','));
+    });
+
+  /* BOM ضروري لـExcel ليقرأ العربية */
+  const csv = '\uFEFF' + lines.join('\r\n');
+  const stamp = todayISO();
+  download(new Blob([csv], { type: 'text/csv;charset=utf-8' }), 'التوصيات-' + stamp + '.csv');
+  toast('نُزّلت ' + rows.length + ' توصية', 'ok');
 }
 
 /* ------------------------------------------------------------------ فتح تقرير */
@@ -3754,6 +4152,10 @@ const API = {
   /* سجل التعديلات */
   readHistory, writeHistory, recordHistory, restoreHistory, dropHistory,
   renderHistoryView, previewHistory, scheduleDraftPush,
+  handleHistoryClick,
+  /* نقل قاعدة البيانات والمسودات والتوصيات */
+  openTransfer, runTransfer, openDrafts, renderDrafts, describeReport,
+  openCurrentDraft, exportCurrentDraft, exportRecsCsv,
 };
 if (typeof window !== 'undefined') window.ADMH = API;
 if (typeof module !== 'undefined' && module.exports) module.exports = API;

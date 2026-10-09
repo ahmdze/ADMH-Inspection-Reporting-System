@@ -883,6 +883,129 @@
     return settingsDoc().get().then(d => (d.exists ? d.data() : null)).catch(() => null);
   }
 
+  /* =========================================================================
+     نقل صريح لقاعدة البيانات — رفع أو تنزيل
+     =========================================================================
+     لا دمج تلقائي ولا «الأحدث يفوز». أنت تقرّر:
+       · uploadDatabase()    كل ما على هذا الجهاز يحلّ محلّ السحابة
+       · downloadDatabase()  كل ما في السحابة يحلّ محلّ ما على الجهاز
+
+     وهذا يجعل الأمر منظّماً: تعرف متى رفعت، ومن أي جهاز، ومتى نزّلت.
+     ========================================================================= */
+
+  /** يجمع كل ما في السحابة في كائن واحد */
+  function pullDatabase() {
+    return reportsCol().get().then(snap => {
+      const reports = [];
+      if (snap && snap.forEach) {
+        snap.forEach(d => {
+          const v = d.data() || {};
+          if (!v._deleted) reports.push(Object.assign({ id: d.id }, v));
+        });
+      }
+      return pullSettings().then(settingsDocData =>
+        pullDraft().then(draftDocData => {
+          const payload = (settingsDocData && settingsDocData.payload) || {};
+          return {
+            reports: reports,
+            settings: payload.settings || null,
+            library: payload.library || null,
+            lists: payload.lists || null,
+            registry: payload.registry || null,
+            draft: (draftDocData && draftDocData.draft) || null,
+            at: (settingsDocData && settingsDocData.updatedAt) || null,
+            device: (settingsDocData && settingsDocData.device) || '',
+          };
+        }));
+    });
+  }
+
+  /** يسجّل وقت آخر عملية في التخزين المحلي */
+  function stampLast(at) {
+    try { jwrite(LS_LAST, at || new Date().toISOString()); } catch (e) { /* تجاهل */ }
+  }
+
+  /**
+   * يرفع قاعدة هذا الجهاز إلى السحابة (استبدال كامل).
+   * @returns {Promise<{reports:number, at:string}>}
+   */
+  function uploadDatabase() {
+    ensureInit();
+    if (!state.connected || !state.user) return Promise.reject(new Error('غير متصل بالمزامنة'));
+
+    const local = (hooks.load && hooks.load()) || {};
+    const stamp = new Date().toISOString();
+    const reports = Array.isArray(local.reports) ? local.reports : [];
+    setState({ busy: true, error: '' });
+
+    return pushReports(reports)
+      .then(() => pushSettings({
+        payload: {
+          settings: local.settings || null,
+          library: local.library || null,
+          lists: local.lists || null,
+          registry: local.registry || null,
+        },
+      }))
+      .then(() => {
+        if (local.draft) {
+          return draftDoc().set({
+            draft: local.draft, updatedAt: stamp, device: state.device,
+          }, { merge: true });
+        }
+      })
+      .then(() => {
+        setState({ busy: false, lastSync: stamp, error: '' });
+        stampLast(stamp);
+        return { reports: reports.length, at: stamp };
+      })
+      .catch(err => {
+        const msg = friendlyError(err);
+        setState({ busy: false, error: msg });
+        throw taggedError(err, msg);
+      });
+  }
+
+  /**
+   * ينزّل قاعدة السحابة إلى هذا الجهاز (استبدال كامل).
+   * @returns {Promise<object>}
+   */
+  function downloadDatabase() {
+    ensureInit();
+    if (!state.connected || !state.user) return Promise.reject(new Error('غير متصل بالمزامنة'));
+
+    setState({ busy: true, error: '' });
+    const stamp = new Date().toISOString();
+
+    return pullDatabase()
+      .then(data => {
+        hooks.save({
+          reports: data.reports,
+          settings: data.settings,
+          library: data.library,
+          lists: data.lists,
+          registry: data.registry,
+          draft: data.draft,
+          draftFromCloud: !!data.draft,
+        });
+        setState({ busy: false, lastSync: stamp, error: '' });
+        stampLast(stamp);
+        return {
+          reports: data.reports.length,
+          at: stamp,
+          hasSettings: !!data.settings,
+          hasLibrary: !!data.library,
+          hasLists: !!data.lists,
+          hasRegistry: !!data.registry,
+        };
+      })
+      .catch(err => {
+        const msg = friendlyError(err);
+        setState({ busy: false, error: msg });
+        throw taggedError(err, msg);
+      });
+  }
+
   /* ------------------------- المسودة: دفع مستقل مهذّب
      المسودة تتغيّر مع كل ضغطة مفتاح، فلا تصلح ضمن الحمولة العادية.
      لها مستند خاص ودفع مؤجّل يمنع إغراق الشبكة. */
@@ -1218,6 +1341,10 @@
     /* المسودة: دفع مستقل مهذّب + سحب */
     pushDraft,
     pullDraft,
+    /* نقل صريح لقاعدة البيانات */
+    uploadDatabase,
+    downloadDatabase,
+    pullDatabase,
     pushPullRequest,
     parseConfigInput,
     normalizeConfig,
