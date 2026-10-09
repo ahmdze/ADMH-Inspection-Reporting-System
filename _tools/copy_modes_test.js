@@ -53,7 +53,15 @@ function __modesTest() {
     function copyAndWait(mode) {
       window.__lastCopied = null;
       NS.copyReport(mode);
-      return new Promise(function (r) { setTimeout(r, 80); });
+      /* ننتظر ظهور النتيجة فعلاً بدل توقيت ثابت (كان يُنتج فشلاً متقطّعاً) */
+      return new Promise(function (resolve) {
+        var tries = 0;
+        (function poll() {
+          if (window.__lastCopied !== null && window.__lastCopied !== undefined) { resolve(); return; }
+          if (++tries > 100) { resolve(); return; }
+          setTimeout(poll, 10);
+        })();
+      });
     }
 
     (async function () {

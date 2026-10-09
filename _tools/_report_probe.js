@@ -149,6 +149,34 @@ function __reportTest() {
     var dl = document.getElementById('dlSources');
     check('source datalist has options', dl && dl.options.length > 0, dl && dl.options.length);
 
+    /* ---------- اسم السجل: قائمة اختيار + كتابة يدوية ---------- */
+    check('record-name datalist exists', !!document.getElementById('dlRecordNames'));
+    var dlr = document.getElementById('dlRecordNames');
+    check('record-name datalist has options', dlr && dlr.options.length > 0, dlr && dlr.options.length);
+
+    A.state.report.records.push({ name: '', evalList: [], evalManual: '', eval: '' });
+    A.renderAll();
+    var rnInput = document.querySelector('#tRecords tbody input[data-f="name"]');
+    check('record-name input exists', !!rnInput);
+    check('record-name input offers the datalist',
+      !!(rnInput && rnInput.getAttribute('list') === 'dlRecordNames'),
+      rnInput && rnInput.getAttribute('list'));
+    check('record-name input stays a free text field',
+      !!(rnInput && rnInput.tagName === 'INPUT' && rnInput.type === 'text'),
+      rnInput && (rnInput.tagName + '/' + rnInput.type));
+
+    /* الكتابة اليدوية تُحفظ وتصل إلى النموذج */
+    rnInput.value = 'سجل من عندي';
+    rnInput.dispatchEvent(new Event('input', { bubbles: true }));
+    var lastRec = A.state.report.records[A.state.report.records.length - 1];
+    check('manual record name is saved', lastRec.name === 'سجل من عندي', lastRec.name);
+    check('manual record name reaches the model',
+      NS.buildModel().sections.some(function (s) {
+        return s.type === 'list' &&
+          (s.items || []).some(function (i) { return i.indexOf('سجل من عندي') >= 0; });
+      }));
+
+
     /* ---------- معرّف عميل Google: يجب أن يظهر دائماً ----------
        عطل حقيقي سابق: كان داخل #syncOff، فيختفي بعد حفظ الإعدادات —
        فيتعذّر على المستخدم المُهيَّأ إدخاله أصلاً. */

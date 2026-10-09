@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '17.0.0';
+const APP_VERSION = '18.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -579,7 +579,7 @@ function renderRecords() {
     return `
     <tr data-i="${i}">
       <td class="num">${i + 1}</td>
-      <td data-label="اسم السجل"><input type="text" data-f="name" value="${esc(r.name || '')}"></td>
+      <td data-label="اسم السجل"><input type="text" data-f="name" list="dlRecordNames" placeholder="اختر سجلاً أو اكتبه" value="${esc(r.name || '')}" autocomplete="off"></td>
       <td data-label="التقييم">
         <div class="pbody" data-rec-picks="${i}">${chips}</div>
         <textarea data-f="eval" data-manual="${i}" rows="2" placeholder="تقييم مكتوب بيدك (اختياري) — يُضاف إلى ما اخترته أعلاه">${esc(r.evalManual || '')}</textarea>
@@ -686,6 +686,8 @@ function fillDatalists() {
   fillDatalist('#dlDeviceState', 'deviceStates');
   /* جهات السحب / المصادر في جدول الإجراءات — تُحرَّر من مكتبة العبارات */
   fillDatalist('#dlSources', 'procedureSources');
+  /* أسماء السجلات — قائمة قابلة للاختيار، والحقل يبقى قابلاً للكتابة */
+  fillDatalist('#dlRecordNames', 'recordNames');
 
   /* القوائم المنسدلة الثابتة — تُبنى من المكتبة أيضاً */
   const fk = $('#f_facilityKind');
