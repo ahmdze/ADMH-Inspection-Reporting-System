@@ -618,15 +618,58 @@
     return normalizeConfig(jread(LS_CONF, null));
   }
 
+  /**
+   * يهيّئ Firebase مرة واحدة فقط.
+   * =============================================================================
+   * عطل حقيقي كان يحدث: كانت هذه الدالة تُستدعى من أربعة مواضع (تجهيز Google،
+   * الدخول، استهلاك إعادة التوجيه، والمزامنة) بلا أي حماية من التكرار. وكل
+   * نداء كان يُعيد `firebase.firestore()` ويُشغّل `enablePersistence()` من
+   * جديد — فتتكرّر الرسائل في الكونسول بلا داعٍ، ويُعاد ضبط التخزين المؤقت.
+   *
+   * الآن النتيجة تُخزَّن مؤقتاً: تهيئة واحدة لكل تحميل صفحة. وعند الفشل
+   * نُفرّغ المخزون ليُمكن إعادة المحاولة.
+   * =============================================================================
+   */
+  let fbPromise = null;
+
   function initFirebase() {
-    return loadFirebase().then(firebase => {
+    if (fbPromise) return fbPromise;
+
+    fbPromise = loadFirebase().then(firebase => {
       if (!firebase.apps.length) firebase.initializeApp(cfg);
       fb.app = firebase.app();
       fb.auth = firebase.auth();
       fb.db = firebase.firestore();
-      try { fb.db.enablePersistence({ synchronizeTabs: true }).catch(() => {}); } catch (e) {}
+
+      /* -----------------------------------------------------------------
+         التخزين المحلي لـFirestore (العمل بلا إنترنت)
+         -----------------------------------------------------------------
+         `enablePersistence({ synchronizeTabs: true })` هي **الطريقة الوحيدة
+         المتاحة في حزمة compat**. وقد تحقّقنا فعلياً من ذلك في المتصفح:
+         `initializeFirestore` و`persistentLocalCache` و`persistentMultipleTabManager`
+         **غير موجودة** في `firebase.firestore` في compat — لا في 10.12.2 ولا
+         في 11.1.0. فما دامت الحزمة compat فلا بديل متاح.
+
+         وFirebase تُصدر تحذيراً بأن `enableMultiTabIndexedDbPersistence`
+         «ستُلغى في المستقبل» — وهو **إشعار استباقي لا خطأ**، ولا يؤثر في
+         العمل. والبديل سيتطلّب الانتقال إلى الحزمة المعيارية (modular)،
+         وهي تحتاج خطوة بناء والتزامات تُخالف تصميم هذا المشروع
+         (بلا بناء، بلا تبعيات).
+
+         ولأن التهيئة صارت مرة واحدة، لا يتكرر التحذير في الكونسول.
+         ----------------------------------------------------------------- */
+      try {
+        const p = fb.db.enablePersistence({ synchronizeTabs: true });
+        if (p && p.catch) p.catch(() => {});   /* معطّل أو نافذة أخرى: ليس خطأ */
+      } catch (e) { /* بيئة لا تدعم التخزين المحلي: نعمل بلا إنترنت أقل */ }
+
       return fb;
+    }).catch(err => {
+      fbPromise = null;      /* نسمح بإعادة المحاولة */
+      throw err;
     });
+
+    return fbPromise;
   }
 
   function googleProvider() {
