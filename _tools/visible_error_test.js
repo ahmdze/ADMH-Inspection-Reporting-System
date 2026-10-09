@@ -6,10 +6,9 @@
    page now reports the exact Firebase error code.
    ============================================================================= */
 const fs = require('fs'), path = require('path');
-const { execFileSync, spawn } = require('child_process');
 
-const CHROME = require('./_chrome.js').requireChrome();
-const PY = 'C:\\Users\\ahmdz\\.dsh\\dsh-runtimes\\dsh-primary-runtime\\dependencies\\python\\python.exe';
+const chrome = require('./_chrome.js');
+const server = require('./_server.js');
 const ROOT = path.resolve(__dirname, '..');
 const PROBE = path.join(ROOT, '_vis_probe.html');
 
@@ -72,64 +71,54 @@ function buildPage(code) {
   return out;
 }
 
-/**
- * ينتظر أن يستجيب خادم الاختبار فعلاً.
- * -----------------------------------------------------------------------------
- * كان هناك `setTimeout(1800)` ثابت قبل أول طلب. وهذا يهتزّ تحت الحِمل: عند
- * تشغيل مجموعات كثيرة بالتوازي يبطؤ إقلاع الخادم، فيفشل الاختبار بلا عيب حقيقي.
- * الآن نستطلع الخادم حتى يستجيب، بحدّ أقصى معقول.
- */
-function waitForServer(url, timeoutMs) {
-  const net = require('net');
-  const t0 = Date.now();
-  const { hostname, port } = new URL(url);
-  return new Promise((resolve, reject) => {
-    (function attempt() {
-      const sock = net.connect({ host: hostname, port: +port });
-      let done = false;
-      sock.on('connect', () => { done = true; sock.destroy(); resolve(); });
-      sock.on('error', () => {
-        if (done) return;
-        sock.destroy();
-        if (Date.now() - t0 > (timeoutMs || 15000)) reject(new Error('الخادم لم يستجب'));
-        else setTimeout(attempt, 150);
-      });
-    })();
-  });
-}
 
-const server = spawn(PY, ['-m', 'http.server', '8231', '--bind', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
+/* -----------------------------------------------------------------------------
+   الخادم: عملية Node منفصلة عبر _server.js
+   -----------------------------------------------------------------------------
+   كان بايثون بمسار ثابت على Windows، ففشل على CI. ولاحقاً جرّبنا خادماً في
+   العملية نفسها ففشل أيضاً: `execFileSync` يُجمّد حلقة أحداث Node، فلا يقبل
+   الخادم أي اتصال وينتهي Chrome بمهلة بلا رسالة. الحل: عملية منفصلة.
+   ----------------------------------------------------------------------------- */
+const srvPromise = server.start({ root: ROOT });
 
-/* ننتظر الخادم فعلاً بدل توقيت ثابت — كان يهتزّ تحت الحِمل */
-waitForServer('http://127.0.0.1:8231/check.html', 20000).then(() => {
+srvPromise.then(async srv => {
   let pass = 0, fail = 0;
-  CODES.forEach(code => {
-    fs.writeFileSync(PROBE, buildPage(code));
-    let dom = '';
-    try {
-      dom = execFileSync(CHROME, ['--headless=new','--disable-gpu','--no-sandbox',
-        '--virtual-time-budget=14000','--dump-dom','http://127.0.0.1:8231/_vis_probe.html'],
-        { encoding: 'utf8', maxBuffer: 30 * 1024 * 1024, stdio: ['ignore','pipe','ignore'] });
-    } catch (e) { console.log('  chrome failed for ' + code); fail++; return; }
+  try {
+    for (const code of CODES) {
+      fs.writeFileSync(PROBE, buildPage(code));
+      let dom = '';
+      try {
+        dom = chrome.dump(srv.url + '/_vis_probe.html', { budget: 14000, timeout: 120000 });
+      } catch (e) {
+        console.log('  ✗ ' + code + ' → chrome failed: ' + e.message);
+        fail++;
+        continue;
+      }
 
-    const rep = /<pre id="result">([\s\S]*?)<\/pre>/.exec(dom);
-    const txt = rep ? rep[1].replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&') : '';
-    const got = (/REDIRECT_ERROR_CODE=(.+)/.exec(txt) || [])[1];
-    const stCode = (/STATUS_ERRORCODE=(.+)/.exec(txt) || [])[1];
-    const okCode = got === code;
-    const okStatus = stCode === code;
-    /* the friendly Arabic message must also be on the page */
-    const friendlyShown = /Authorized domains|Sign-in method|اتصال|متصفح|محظور|تخزين/i.test(dom);
-    if (okCode && okStatus && friendlyShown) { pass++; console.log(`  ✓ ${code} → reported with a friendly explanation`); }
-    else { fail++; console.log(`  ✗ ${code} → redirect=${got} status=${stCode} friendly=${friendlyShown}`); }
-  });
-
-  try { server.kill(); } catch (e) {}
-  try { fs.unlinkSync(PROBE); } catch (e) {}
-  console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
+      const rep = /<pre id="result">([\s\S]*?)<\/pre>/.exec(dom);
+      const txt = rep ? rep[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') : '';
+      const got = (/REDIRECT_ERROR_CODE=(.+)/.exec(txt) || [])[1];
+      const stCode = (/STATUS_ERRORCODE=(.+)/.exec(txt) || [])[1];
+      const okCode = got === code;
+      const okStatus = stCode === code;
+      /* the friendly Arabic message must also be on the page */
+      const friendlyShown = /Authorized domains|Sign-in method|اتصال|متصفح|محظور|تخزين/i.test(dom);
+      if (okCode && okStatus && friendlyShown) {
+        pass++;
+        console.log('  ✓ ' + code + ' → reported with a friendly explanation');
+      } else {
+        fail++;
+        console.log('  ✗ ' + code + ' → redirect=' + got + ' status=' + stCode + ' friendly=' + friendlyShown);
+      }
+    }
+  } finally {
+    srv.close();
+    try { fs.unlinkSync(PROBE); } catch (e) { /* تجاهل */ }
+    chrome.cleanProfile();
+  }
+  console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');
   process.exit(fail ? 1 : 0);
 }).catch(e => {
   console.error('✗ ' + e.message);
-  try { server.kill(); } catch (err) {}
   process.exit(1);
 });

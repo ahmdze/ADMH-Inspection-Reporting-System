@@ -19,3 +19,13 @@ _tools/shots/
 
 # مجلد أُنشئ بالخطأ (الصحيح .git/hooks/)
 /git/
+
+# ملف تعريف Chrome المؤقّت للاختبارات
+.chrome-tmp/
+
+# مخرجات اختبارات مؤقتة
+_t_*.html
+_probe*.html
+_vis_probe.html
+_dom_probe.html
+view_probe.html

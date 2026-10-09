@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const ROOT = path.resolve(__dirname, '..');
 
 /* مسارات التثبيت المعتادة لكل نظام */
 const CANDIDATES = [
@@ -95,4 +96,131 @@ function requireChrome() {
   return c;
 }
 
-module.exports = { findChrome, requireChrome, CANDIDATES };
+/* =============================================================================
+   ملف تعريف مؤقّت لكل تشغيل + تنظيفه
+   =============================================================================
+   عطل حقيقي حدث أثناء التطوير:
+     كل تشغيل لـChrome بلا `--user-data-dir` يكتب ملفاً مؤقتاً في
+     `%TEMP%\HeadlessChrome*` ولا يحذفه. بعد عشرات التشغيلات امتلأ القرص
+     (٥١٣ مجلداً · ٧٨٧ ميجابايت)، **فتعلّق Chrome** وصارت اختبارات المتصفح
+     تفشل بلا سبب ظاهر في الكود.
+
+   الحل: مجلد مؤقّت خاص بكل تشغيل، نحذفه دائماً — حتى عند الفشل أو الإنهاء.
+   ============================================================================= */
+const os = require('os');
+const { spawnSync } = require('child_process');
+
+let profileDir = null;
+let cleaned = false;
+
+/** يُنشئ مجلد ملف تعريف مؤقّتاً (مرة واحدة لكل عملية) */
+function profilePath() {
+  if (profileDir) return profileDir;
+  /* ---------------------------------------------------------------------
+     نختار قرصاً فيه مساحة، لا القرص الذي فيه مجلد النظام.
+     ---------------------------------------------------------------------
+     عطل حقيقي: كان مجلد النظام على قرص ممتلئ (٥٠ ميجابايت متاحة)، وChrome
+     يحتاج مئات الميجابايت لملف تعريفه المؤقّت — فتعلّق بلا رسالة خطأ واضحة.
+     نجرّب TEMP ثم القرص الجذر للمشروع، ونقيس المساحة المتاحة فعلاً.
+     --------------------------------------------------------------------- */
+  const candidates = [];
+  try { candidates.push(os.tmpdir()); } catch (e) { /* تجاهل */ }
+  candidates.push(path.join(ROOT, '.chrome-tmp'));
+
+  const base = chooseWritable(candidates) ||
+    path.join(os.tmpdir(), 'admh-chrome-' + process.pid);
+
+  try { fs.mkdirSync(base, { recursive: true }); } catch (e) { /* سنعمل بلا ملف تعريف */ }
+  profileDir = base;
+  return profileDir;
+}
+
+/**
+ * يختار أول مسار قابل للكتابة وفيه مساحة كافية.
+ * @param {string[]} list
+ * @param {number} [needMB] المساحة المطلوبة بالميجابايت
+ */
+function chooseWritable(list, needMB) {
+  const need = (needMB || 300) * 1024 * 1024;
+  for (const p of list) {
+    try {
+      fs.mkdirSync(p, { recursive: true });
+      /* نكتب ملفاً فعلياً — الوجود وحده لا يكفي */
+      const probe = path.join(p, '.admh-write-probe-' + Date.now());
+      fs.writeFileSync(probe, 'x');
+      fs.unlinkSync(probe);
+      /* هل فيه مساحة كافية؟ (checkDiskSpace متاح في Node 18.15+) */
+      try {
+        if (typeof fs.statfsSync === 'function') {
+          const st = fs.statfsSync(p);
+          const free = st.bavail * st.bsize;
+          if (free < need) continue;
+        }
+      } catch (e) { /* بلا قياس: نقبله إن كان قابلاً للكتابة */ }
+      return p;
+    } catch (e) { /* جرّب التالي */ }
+  }
+  return null;
+}
+
+/** يحذف مجلد ملف التعريف */
+function cleanProfile() {
+  if (cleaned || !profileDir) return;
+  cleaned = true;
+  try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch (e) { /* تجاهل */ }
+}
+
+/* نُنظّف عند أي طريقة خروج — وإلا تراكمت الملفات مرة أخرى */
+process.on('exit', cleanProfile);
+process.on('SIGINT', () => { cleanProfile(); process.exit(130); });
+process.on('SIGTERM', () => { cleanProfile(); process.exit(143); });
+process.on('uncaughtException', e => { cleanProfile(); console.error(e); process.exit(1); });
+
+/** وسائط Chrome المشتركة — ملف تعريف مؤقّت وصفحة بلا واجهة */
+function args(extra) {
+  return [
+    '--headless=new',
+    '--disable-gpu',
+    '--no-sandbox',
+    '--disable-dev-shm-usage',       /* مساحة /dev/shm صغيرة في CI */
+    '--user-data-dir=' + profilePath(),
+    '--disable-extensions',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-background-networking',
+    '--disable-sync',
+    '--mute-audio',
+  ].concat(extra || []);
+}
+
+/**
+ * يشغّل Chrome مرة واحدة ويعيد مخرج DOM.
+ * يضيف مهلته الخاصة حتى لا يتعلّق التشغيل بلا نهاية.
+ * @param {string} url
+ * @param {object} [opts] { budget, timeout, extra }
+ * @returns {string} DOM
+ */
+function dump(url, opts) {
+  opts = opts || {};
+  const a = args([
+    '--virtual-time-budget=' + (opts.budget || 14000),
+    '--dump-dom',
+    url,
+  ].concat(opts.extra || []));
+
+  const r = spawnSync(findChrome() || requireChrome(), a, {
+    encoding: 'utf8',
+    maxBuffer: opts.maxBuffer || (48 * 1024 * 1024),
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: opts.timeout || 120000,
+  });
+  if (r.error) throw r.error;
+  return r.stdout || '';
+}
+
+module.exports = {
+  findChrome, requireChrome,
+  args, dump,
+  profilePath, cleanProfile,
+  CANDIDATES,
+};

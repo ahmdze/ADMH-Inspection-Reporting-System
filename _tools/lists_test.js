@@ -4,7 +4,8 @@
 const fs = require('fs'), path = require('path');
 const { execFileSync } = require('child_process');
 
-const CHROME = require('./_chrome.js').requireChrome();
+const chrome = require('./_chrome.js');
+const CHROME = chrome.requireChrome();
 const PROBE = path.resolve(__dirname, 'lists_probe.html');
 
 const html = `<!DOCTYPE html>
@@ -149,4 +150,5 @@ const pass = +( /PASS (\d+)/.exec(text) || [0, 0])[1];
 const fail = +( /FAIL (\d+)/.exec(text) || [0, 0])[1];
 if (!/DONE/.test(text)) { console.error('probe did not finish'); process.exit(1); }
 console.log(`\n=== RESULT: ${pass} passed, ${fail} failed ===`);
+chrome.cleanProfile();
 process.exit(fail ? 1 : 0);

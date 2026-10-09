@@ -7,7 +7,8 @@
    ============================================================================= */
 const fs = require('fs'), path = require('path');
 const { execFileSync } = require('child_process');
-const CHROME = require('./_chrome.js').requireChrome();
+const chrome = require('./_chrome.js');
+const CHROME = chrome.requireChrome();
 const ROOT = path.resolve(__dirname, '..');
 const PAGE = path.join(ROOT, '_t_storage.html');
 
@@ -148,4 +149,5 @@ try { fs.unlinkSync(PAGE); } catch (e) {}
 const pass = +(/PASS (\d+)/.exec(text) || [0, 0])[1];
 const fail = +(/FAIL (\d+)/.exec(text) || [0, 0])[1];
 console.log('\n=== RESULT: ' + pass + ' passed, ' + fail + ' failed ===');
+chrome.cleanProfile();
 process.exit(fail ? 1 : 0);

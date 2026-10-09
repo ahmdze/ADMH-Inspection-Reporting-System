@@ -1,15 +1,20 @@
-/* Verify the unauthorized-domain message names the REAL hostname,
-   served over HTTP so location.hostname is populated. */
-const fs = require('fs'), path = require('path');
-const { execFileSync, spawn } = require('child_process');
+/* =============================================================================
+   Verify the unauthorized-domain message names the REAL hostname.
+   -----------------------------------------------------------------------------
+   عطلان كانا يمنعان التشغيل على CI:
+     ١) مسار بايثون ثابت على Windows لِتشغيل خادم — لا وجود له على Linux.
+     ٢) توقيت ثابت (1800ms) قبل أول طلب — يهتزّ تحت الحِمل.
+   الآن: خادم Node مدمج، وانتظار فعلي لاستجابته.
+   ============================================================================= */
+const fs = require('fs');
+const path = require('path');
+const { execFileSync } = require('child_process');
 
-const CHROME = require('./_chrome.js').requireChrome();
+const chrome = require('./_chrome.js');
+const CHROME = chrome.requireChrome();
+const server = require('./_server.js');
 const ROOT = path.resolve(__dirname, '..');
 const PROBE = path.join(ROOT, '_dom_probe.html');
-
-/* serve the project so hostname is a real value */
-const server = spawn('C:\\Users\\ahmdz\\.dsh\\dsh-runtimes\\dsh-primary-runtime\\dependencies\\python\\python.exe',
-  ['-m', 'http.server', '8199', '--bind', '127.0.0.1'], { cwd: ROOT, stdio: 'ignore' });
 
 const html = `<!DOCTYPE html>
 <html lang="ar" dir="rtl"><head><meta charset="UTF-8"><title>dom probe</title></head>
@@ -50,28 +55,38 @@ const html = `<!DOCTYPE html>
 })();
 </script></body></html>`;
 
-fs.writeFileSync(PROBE, html);
-
-setTimeout(() => {
-  let dom = '';
+(async () => {
+  let srv = null;
   try {
-    dom = execFileSync(CHROME, ['--headless=new','--disable-gpu','--no-sandbox',
-      '--virtual-time-budget=12000','--dump-dom','http://127.0.0.1:8199/_dom_probe.html'],
-      { encoding: 'utf8', maxBuffer: 30 * 1024 * 1024, stdio: ['ignore','pipe','ignore'] });
-  } catch (e) { console.error('chrome failed', e.message); }
+    fs.writeFileSync(PROBE, html);
+    srv = await server.start({ root: ROOT });
+    await server.waitFor(srv.url + '/index.html', 20000);
 
-  try { server.kill(); } catch (e) {}
-  try { fs.unlinkSync(PROBE); } catch (e) {}
+    let dom = '';
+    try {
+      dom = execFileSync(CHROME, ['--headless=new', '--disable-gpu', '--no-sandbox',
+        '--virtual-time-budget=12000', '--dump-dom', srv.url + '/_dom_probe.html'],
+        { encoding: 'utf8', maxBuffer: 30 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], timeout: 90000 });
+    } catch (e) { console.error('chrome failed: ' + e.message); }
 
-  const m = /<pre id="out">([\s\S]*?)<\/pre>/.exec(dom);
-  if (!m) { console.error('no output'); process.exit(1); }
-  const text = m[1].replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&amp;/g,'&');
-  console.log(text);
+    const m = /<pre id="out">([\s\S]*?)<\/pre>/.exec(dom);
+    if (!m) { console.error('no output from probe'); process.exit(1); }
+    const text = m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+    console.log(text);
 
-  const host = (/HOSTNAME=(\S+)/.exec(text) || [])[1] || '';
-  const contains = /CONTAINS_HOST=true/.test(text);
-  const finished = /DONE/.test(text);
-  const pass = contains && finished;
-  console.log(`\n=== ${pass ? 'PASS' : 'FAIL'}: message ${contains ? 'names' : 'does NOT name'} the real host (${host}) ===`);
-  process.exit(pass ? 0 : 1);
-}, 1800);
+    const host = (/HOSTNAME=(\S+)/.exec(text) || [])[1] || '';
+    const contains = /CONTAINS_HOST=true/.test(text);
+    const finished = /DONE/.test(text);
+    const pass = contains && finished;
+    console.log(`\n=== ${pass ? 'PASS' : 'FAIL'}: message ${contains ? 'names' : 'does NOT name'} the real host (${host}) ===`);
+    chrome.cleanProfile();
+    process.exit(pass ? 0 : 1);
+  } catch (e) {
+    console.error('TEST ERROR: ' + e.message);
+    chrome.cleanProfile();
+    process.exit(1);
+  } finally {
+    if (srv) srv.close();
+    try { fs.unlinkSync(PROBE); } catch (e) { /* تجاهل */ }
+  }
+})();

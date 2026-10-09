@@ -1,12 +1,15 @@
 # =============================================================================
 # التشغيل الآلي — GitHub Actions
 # =============================================================================
-# يشغّل فحص الصياغة ثم كل الاختبارات (وحدات + متصفح) عند كل رفع وطلب دمج.
+# ثلاث مراحل: فحص الصياغة ← الوحدات ← المتصفح.
 #
-# لماذا Chrome على runner؟ اختبارات المتصفح تفحص ما يراه المستخدم فعلاً:
-# رسم الواجهة، ربط الأزرار، أوضاع النسخ، وتصدير Word. ولا يمكن الاستغناء
-# عنها باختبارات الوحدات وحدها — فقد سبق أن مرّ عطل «الزر ينسخ بلا خيارات»
-# من كل اختبارات الوحدات، وكشفته اختبارات المتصفح فقط.
+# لماذا Chrome حقيقي؟ اختبارات المتصفح تفحص ما يراه المستخدم فعلاً: رسم
+# الواجهة، ربط الأزرار، أوضاع النسخ، وتصدير Word. وقد سبق أن مرّ عطل
+# «الزر ينسخ بلا خيارات» من كل اختبارات الوحدات، وكشفته اختبارات المتصفح.
+#
+# ملاحظة: كل الخطوات تعمل على Linux بلا بايثون وبلا أي تبعية — الأدوات كلها
+# بكتابة Node. (كانت الاختبارات تستعمل مسار بايثون ثابتاً على Windows،
+# فكانت تفشل هنا.)
 # =============================================================================
 
 name: الاختبارات
@@ -18,14 +21,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# نُلغي التشغيل القديم عند رفع جديد على الفرع نفسه — توفيراً للوقت
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # ---------------------------------------------------------------------------
-  # ١) فحص سريع: الصياغة فقط. يفشل في ثوانٍ ويكشف الأخطاء الواضحة فوراً.
+  # ١) فحص سريع: الصياغة وحدها. يفشل في ثوانٍ ويكشف الأخطاء الواضحة فوراً،
+  #    فلا ننتظر أربع دقائق لنعرف أن قوساً ناقص.
   # ---------------------------------------------------------------------------
   syntax:
     name: فحص الصياغة
@@ -34,12 +40,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: فحص صياغة كل الملفات
         run: node _tools/syntax_check.js
+      - name: فحص أصول النشر (حجم الملفات)
+        run: node _tools/deploy_check.js
 
   # ---------------------------------------------------------------------------
-  # ٢) الوحدات: منطق خالص بلا متصفح — سريع جداً
+  # ٢) الوحدات: منطق خالص بلا متصفح — ثوانٍ
   # ---------------------------------------------------------------------------
   unit:
     name: اختبارات الوحدات
@@ -49,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
       - name: تشغيل اختبارات الوحدات
         run: node _tools/run_all.js --group unit
 
@@ -60,33 +68,39 @@ jobs:
     name: اختبارات المتصفح
     runs-on: ubuntu-latest
     needs: syntax
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: تثبيت Chrome
         id: chrome
         uses: browser-actions/setup-chrome@v1
-        with:
-          chrome-version: stable
 
       - name: تشغيل اختبارات المتصفح
         env:
-          # الاختبارات تكتشف Chrome من هذا المتغيّر إن وُجد
+          # الاختبارات تكتشف Chrome من هذا المتغيّر أولاً
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
-        run: node _tools/run_all.js --group browser
+        run: node _tools/run_all.js --group browser --json > test-report.json
 
-      - name: رفع تقرير JSON عند الفشل
-        if: failure()
-        env:
-          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
-        run: node _tools/run_all.js --group browser --json > test-report.json || true
+      - name: عرض ملخّص النتيجة
+        if: always()
+        run: |
+          node -e "
+            const j = require('./test-report.json');
+            const bad = j.results.filter(r => r.fail);
+            console.log(j.totalPass + ' ناجح، ' + j.totalFail + ' فاشل من ' + j.suites + ' مجموعة');
+            bad.forEach(r => console.log('  ✗ ' + r.file));
+            process.exit(bad.length ? 1 : 0);
+          " || true
 
-      - uses: actions/upload-artifact@v4
-        if: failure()
+      - name: رفع تقرير الاختبارات
+        uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: تقرير-الاختبارات
           path: test-report.json
           if-no-files-found: ignore
+          retention-days: 14

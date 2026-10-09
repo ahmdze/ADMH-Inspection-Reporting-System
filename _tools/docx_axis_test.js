@@ -3,11 +3,13 @@
    -----------------------------------------------------------------------------
    نُصدّر الملف في متصفح حقيقي، نُخرجه base64 من الصفحة، ثم نحلّله كأرشيف ZIP
    ونقرأ word/document.xml — فالفحص النصّي هو الحكم.
+
+   كان التحليل يتمّ بـ**بايثون** عبر مسار ثابت على Windows، ففشل على CI.
+   الآن نستخدم `_zip.js` — قارئ ZIP بكتابة Node نفسها بلا أي تبعية.
    ============================================================================= */
 const fs = require('fs'), path = require('path');
-const { execFileSync } = require('child_process');
-const CHROME = require('./_chrome.js').requireChrome();
-const PY = 'C:\\Users\\ahmdz\\.dsh\\dsh-runtimes\\dsh-primary-runtime\\dependencies\\python\\python.exe';
+const chrome = require('./_chrome.js');
+const zip = require('./_zip.js');
 const ROOT = path.resolve(__dirname, '..');
 const PAGE = path.join(ROOT, '_t_docx.html');
 const OUT = path.join(ROOT, '_tools', 'axis-check.docx');
@@ -54,9 +56,10 @@ const index = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 fs.writeFileSync(PAGE, index.replace('<div class="scrim" id="scrim"></div>',
   '<pre id="__dx" style="display:none">PENDING</pre>\n<script>\n' + TEST + '\n</script>\n<div class="scrim" id="scrim"></div>', 1));
 
-const dom = execFileSync(CHROME, ['--headless=new', '--disable-gpu', '--no-sandbox', '--allow-file-access-from-files',
-  '--window-size=1200,900', '--virtual-time-budget=25000', '--dump-dom', 'file:///' + PAGE.replace(/\\/g, '/')],
-  { encoding: 'utf8', maxBuffer: 80 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+const dom = chrome.dump('file:///' + PAGE.replace(/\\/g, '/'), {
+  budget: 25000, maxBuffer: 80 * 1024 * 1024,
+  extra: ['--allow-file-access-from-files', '--window-size=1200,900'],
+});
 
 const m = /<pre id="__dx"[^>]*>([\s\S]*?)<\/pre>/.exec(dom);
 if (!m) { console.error('no output'); process.exit(1); }
@@ -64,28 +67,40 @@ const raw = m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '
 const b64m = /B64=([A-Za-z0-9+/=]+)/.exec(raw);
 if (!b64m) { console.error('no blob:', raw.slice(0, 200)); process.exit(1); }
 fs.writeFileSync(OUT, Buffer.from(b64m[1], 'base64'));
-console.log('docx written:', fs.statSync(OUT).size, 'bytes');
-try { fs.unlinkSync(PAGE); } catch (e) {}
+console.log('docx written: ' + fs.statSync(OUT).size + ' bytes');
+try { fs.unlinkSync(PAGE); } catch (e) { /* تجاهل */ }
 
-const py = `
-import sys, zipfile, re
-sys.stdout.reconfigure(encoding='utf-8')
-z = zipfile.ZipFile(r'${OUT.replace(/\\/g, '/')}')
-xml = z.read('word/document.xml').decode('utf-8', 'replace')
-texts = re.findall(r'<w:t[^>]*>([^<]*)</w:t>', xml)
-full = ' '.join(texts)
-print('text chars:', len(full))
-print('tables:', xml.count('<w:tbl>'))
-for needle in ['المحور الإداري //', 'وحدة البصمة', 'الإجراءات المتخذة', 'الملاك الكلي', 'التوصيات', 'فريق التفتيش']:
-    print(('  HAS     ' if needle in full else '  MISSING ') + needle)
-# العنوان الرئيسي: تقرير زيارة ... إلى مركز صحي ...
-print('  title present:', ('تقرير' in full) and ('الخناسة' in full))
-print('  axis occurrences:', full.count('المحور الإداري'))
-print('--- first 200 chars of the document text ---')
-print(full[:200])
-`;
-const res = execFileSync(PY, ['-X', 'utf8', '-c', py], { encoding: 'utf8' });
-console.log(res);
-const ok = /HAS     المحور الإداري/.test(res) && /tables: 0/.test(res) && /title present: True/.test(res);
+/* ---------- التحليل: قارئ ZIP بكتابة Node ---------- */
+let doc;
+try {
+  doc = zip.docxText(fs.readFileSync(OUT));
+} catch (e) {
+  console.error('تعذّر قراءة ملف Word: ' + e.message);
+  process.exit(1);
+}
+
+console.log('text chars: ' + doc.text.length);
+console.log('tables: ' + doc.tables);
+
+const NEEDLES = [
+  'المحور الإداري //',
+  'وحدة البصمة',
+  'الإجراءات المتخذة',
+  'الملاك الكلي',
+  'التوصيات',
+  'فريق التفتيش',
+];
+NEEDLES.forEach(n =>
+  console.log((doc.text.indexOf(n) >= 0 ? '  HAS     ' : '  MISSING ') + n));
+
+const titlePresent = doc.text.indexOf('تقرير') >= 0 && doc.text.indexOf('الخناسة') >= 0;
+console.log('  title present: ' + titlePresent);
+console.log('  axis occurrences: ' + (doc.text.split('المحور الإداري').length - 1));
+console.log('--- first 200 chars of the document text ---');
+console.log(doc.text.slice(0, 200));
+
+const ok = doc.text.indexOf('المحور الإداري //') >= 0 && doc.tables === 0 && titlePresent;
+console.log('');
 console.log('=== RESULT: ' + (ok ? 'PASS' : 'FAIL') + ' ===');
+chrome.cleanProfile();
 process.exit(ok ? 0 : 1);
