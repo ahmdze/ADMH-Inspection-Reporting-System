@@ -70,6 +70,7 @@ const GROUPS = [
   { file: 'followup_test.js',      browser: true,  what: 'ملف المؤسسات والتوصيات والمؤشرات' },
   { file: 'history_ui_test.js',    browser: true,  what: 'سجل التعديلات في الواجهة' },
   { file: 'transfer_test.js',      browser: true,  what: 'نقل قاعدة البيانات والمسودات والتوصيات' },
+  { file: 'manual_sync_test.js',   browser: true,  what: 'لا مزامنة تلقائية + تفريغ التخزين الشامل' },
   { file: 'copy_menu_test.js',     browser: true,  what: 'قائمة النسخ' },
   { file: 'copy_modes_test.js',    browser: true,  what: 'أوضاع النسخ الأربعة' },
   { file: 'format_test.js',        browser: true,  what: 'تنسيق النسخ وفاصل المحور' },

@@ -123,11 +123,19 @@ function __histTest() {
     check('saving a draft stamps a local change time', !!meta.draft, meta);
     check('the stamp is a valid date', !isNaN(Date.parse(meta.draft || '')), meta.draft);
 
-    /* المسودة تُزامَن: الحمولة تحملها */
-    var loaded = A.sync.get().__load ? A.sync.get().__load() : null;
+    /* ---------------------------------------------------------------------
+       المسودة: تُختم محلياً وتُرسل مع زر الرفع فقط.
+       ---------------------------------------------------------------------
+       كان scheduleDraftPush يدفعها تلقائياً بعد ١٢ ثانية. وقد أُزيل بطلب
+       صريح: لا مزامنة تلقائية إطلاقاً. فنتحقق الآن من **غيابه** — ومن أن
+       وقت تعديل المسودة ما زال يُختم (فيعرف زر الرفع أنها أحدث).
+       --------------------------------------------------------------------- */
     check('the sync payload includes the draft',
       !!(A.readRegistry && typeof A.readRegistry === 'function'));
-    check('scheduleDraftPush is exported', typeof A.scheduleDraftPush === 'function');
+    check('NO automatic draft push exists (manual sync only)',
+      typeof A.scheduleDraftPush !== 'function', typeof A.scheduleDraftPush);
+    check('the draft change time is still stamped so upload can see it',
+      !!meta.draft, meta.draft);
 
     check('no runtime errors at the end', window.__errs.length === 0, window.__errs);
     finish();

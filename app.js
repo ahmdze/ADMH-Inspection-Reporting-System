@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '24.0.0';
+const APP_VERSION = '25.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -510,13 +510,12 @@ function saveDraft() {
     /* المؤشر في الشريط العلوي مخصّص لحالة المزامنة، فلا نلمسه هنا. */
 
     /* ---------------------------------------------------------------------
-       مزامنة المسودة
+       وقت تعديل المسودة — يُزامَن مع زر الرفع فقط
        ---------------------------------------------------------------------
-       المسودة كانت محلية فقط، فلا يظهر ما لم يُحفظ في الأرشيف على الجهاز
-       الآخر. الآن نُعلّم وقت تعديلها لتُزامَن مثل بقية المجموعات.
+       لا ندفعها تلقائياً: المزامنة كلها صارت يدوية بطلب المستخدم. لكننا
+       نُعلّم وقت تعديلها ليعرف زر الرفع أنها أحدث من نسخة السحابة.
        --------------------------------------------------------------------- */
     stampLocalChange('draft');
-    scheduleDraftPush();
 
     /* لقطة في سجل التعديلات — بفاصل زمني يمنع سجلاً لكل ضغطة مفتاح */
     recordHistory('تعديل');
@@ -524,27 +523,17 @@ function saveDraft() {
 }
 
 /* =============================================================================
-   مزامنة المسودة — دفع مؤجّل ومهذّب
+   المزامنة يدوية بالكامل — لا دفع تلقائي
    =============================================================================
-   المسودة تتغيّر مع كل ضغطة مفتاح، فدفعها فوراً يُغرق الشبكة. نؤجّل الدفع
-   فترة (`DRAFT_PUSH_MS`) ثم نُرسل أحدث نسخة مرة واحدة.
-   ============================================================================= */
-const DRAFT_PUSH_MS = 12000;
-let draftPushTimer = null;
+   طلب صريح من المستخدم: فتح الصفحة **لا يُزامن شيئاً**. المزامنة تحدث فقط
+   عند ضغط زر: المزامنة الذكية · الرفع · التنزيل.
 
-/** يجدول دفعاً مؤجّلاً للمسودة — بلا إغراق الشبكة */
-function scheduleDraftPush() {
-  if (!sync.available()) return;
-  const S = sync.get();
-  if (!S || !S.status().connected) return;      /* بلا اتصال: تُزامَن لاحقاً */
-  clearTimeout(draftPushTimer);
-  draftPushTimer = setTimeout(() => {
-    draftPushTimer = null;
-    try {
-      if (S.pushDraft) S.pushDraft();
-    } catch (e) { /* الدفع المؤجّل تحسين لا أكثر */ }
-  }, DRAFT_PUSH_MS);
-}
+   وكان هنا `scheduleDraftPush()` يدفع المسودة تلقائياً بعد ١٢ ثانية من
+   التوقّف عن الكتابة. أُزيل لأن المزامنة كلها صارت مقصودة.
+
+   ووقت تعديل المسودة ما زال يُختم في `saveDraft()`، فيعرف زر الرفع أنها
+   أحدث ويُرسلها مع القاعدة.
+   ============================================================================= */
 
 /* =============================================================================
    سجل التعديلات
@@ -1573,6 +1562,11 @@ function bindButtons() {
   });
   bindOn('#btnBackupExport', () => exportBackups());
   bindOn('#btnBackupImport', () => $('#fileBackupImport').click());
+
+  /* تفريغ التخزين المحلي */
+  bindOn('#btnClearAll', () => clearAllLocal());
+  bindOn('#btnStorageInfo', () => renderStorageInfo());
+
   const fbi = $('#fileBackupImport');
   if (fbi) fbi.onchange = () => { importBackups(fbi.files[0]); fbi.value = ''; };
   (function () {
@@ -1952,6 +1946,9 @@ function verifyBindings() {
     /* نقل قاعدة البيانات والمسودات */
     'btnUploadDb', 'btnDownloadDb', 'btnTransferGo',
     'btnDrafts', 'btnDraftsRefresh', 'btnDraftsExport',
+    /* التخزين المحلي */
+    'btnWipe', 'btnClearAll', 'btnStorageInfo',
+    'btnBackupNow', 'btnBackupExport', 'btnBackupImport',
     'bulkFillEmpty', 'bulkFillAll'];
 
   /* ---------------------------------------------------------------------
@@ -2018,12 +2015,151 @@ function importArchiveJSON(e) {
   };
   rd.readAsText(f);
 }
-function wipeAll() {
-  if (!confirm('سيتم حذف كل التقارير والإعدادات نهائياً. هل أنت متأكد؟')) return;
-  if (!confirm('تأكيد أخير — لا يمكن التراجع. متابعة؟')) return;
-  [LS_REPORTS, LS_DRAFT, LS_SETTINGS, LS_LIBRARY].forEach(k => { try { localStorage.removeItem(k); } catch (x) {} });
-  location.reload();
+/* =============================================================================
+   تفريغ التخزين المحلي بالكامل
+   =============================================================================
+   عطل في النسخة السابقة: `wipeAll` كانت تحذف **أربعة مفاتيح فقط** من عشرة.
+   فتبقى بعدها: سجل التعديلات (history) · سجل المؤسسات والتوصيات (registry) ·
+   النسخ الاحتياطية الكاملة · أوقات المزامنة · مالك البيانات المحلية · معرّف
+   عميل Google. فالمستخدم يظن أنه صفّح كل شيء وبقيت بيانات حقيقية.
+
+   الآن: نمسح **كل مفتاح يبدأ بـ`admh.`** — فمهما أُضيف مفتاح جديد مستقبلاً
+   يُمسح تلقائياً بلا تعديل. ونُظهر للمستخدم ما سيُمسح قبل تنفيذه.
+   ============================================================================= */
+const STORAGE_PREFIX = 'admh.';
+
+/** كل مفاتيح التطبيق في هذا المتصفح */
+function appStorageKeys() {
+  const keys = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf(STORAGE_PREFIX) === 0) keys.push(k);
+    }
+  } catch (e) { /* تخزين محظور */ }
+  return keys.sort();
 }
+
+/** وصف مقروء لمفتاح تخزين */
+function storageKeyLabel(k) {
+  const MAP = {
+    'admh.reports.v2': 'الأرشيف (التقارير المحفوظة)',
+    'admh.draft.v2': 'المسودة الحالية',
+    'admh.settings.v2': 'الإعدادات والترويسة',
+    'admh.library.v2': 'مكتبة العبارات',
+    'admh.lists.v1': 'قوائم الاختيار',
+    'admh.registry.v1': 'سجل المؤسسات والتوصيات',
+    'admh.history.v1': 'سجل التعديلات والنسخ',
+    'admh.backup.transfer.v1': 'النسخ الاحتياطية الكاملة',
+    'admh.sync.meta.v1': 'أوقات تعديل البيانات',
+    'admh.sync.config': 'إعدادات المزامنة',
+    'admh.sync.last': 'وقت آخر مزامنة',
+    'admh.sync.gclient': 'معرّف عميل Google',
+    'admh.local.owner.v1': 'حساب صاحب البيانات المحلية',
+    'admh.theme': 'الوضع الليلي/النهاري',
+  };
+  return MAP[k] || k;
+}
+
+/**
+ * يفرّغ كل التخزين المحلي ثم يُعيد تحميل الصفحة.
+ * -----------------------------------------------------------------------------
+ * الترتيب مهم: نمحو بيانات التطبيق، ثم مخزون عامل الخدمة (وإلا خدم الملفات
+ * القديمة)، ثم نُعيد التحميل. وبهذا تُحمَّل الموارد من الشبكة من جديد.
+ * -----------------------------------------------------------------------------
+ */
+function clearAllLocal() {
+  const keys = appStorageKeys();
+  const lines = keys.map(k => '• ' + storageKeyLabel(k)).join('\n');
+
+  const hasData = keys.length > 0;
+  const warn =
+    'تفريغ التخزين المحلي بالكامل\n' +
+    '────────────────────────────\n\n' +
+    (hasData ? 'سيُحذف نهائياً:\n' + lines + '\n\n' : 'لا توجد بيانات محفوظة.\n\n') +
+    'وسيُمسح أيضاً مخزون التطبيق المؤقّت، ثم تُعاد الصفحة للتحميل من جديد.\n\n' +
+    '⚠️ لا يمكن التراجع. إن كان لديك عمل مهم، صدّر نسخة احتياطية أولاً.\n\n' +
+    'هل تريد المتابعة؟';
+
+  if (!confirm(warn)) return;
+
+  /* تأكيد ثانٍ لأن العملية لا رجعة فيها */
+  if (hasData && !confirm('تأكيد أخير: سيُحذف كل ما سبق نهائياً. متابعة؟')) return;
+
+  const removed = [];
+  keys.forEach(k => {
+    try { localStorage.removeItem(k); removed.push(k); } catch (e) { /* تجاهل */ }
+  });
+  /* احتياط: مفاتيح قد تكون خارج البادئة */
+  ['admh.lists.v1'].forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
+
+  toast('أُفرغ التخزين المحلي (' + removed.length + ' مفتاحاً) — تُعاد الصفحة الآن', 'ok', 3000);
+
+  /* ---------------------------------------------------------------------
+     مسح مخزون عامل الخدمة ثم إعادة التحميل.
+     ---------------------------------------------------------------------
+     بلا هذه الخطوة قد يخدم عامل الخدمة النسخة القديمة من الملفات، فلا تظهر
+     النسخة الجديدة. وننتظر المسح قبل التحديث ليكون التحميل نظيفاً.
+     --------------------------------------------------------------------- */
+  const done = () => { location.reload(); };
+
+  if (typeof caches !== 'undefined' && caches.keys) {
+    caches.keys()
+      .then(names => Promise.all(names.map(n => caches.delete(n))))
+      .catch(() => {})
+      .then(() => {
+        /* إلغاء تسجيل عامل الخدمة أيضاً، فيُعاد تسجيله نظيفاً بعد التحميل */
+        if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+          return navigator.serviceWorker.getRegistrations()
+            .then(regs => Promise.all(regs.map(r => r.unregister())))
+            .catch(() => {});
+        }
+      })
+      .then(done)
+      .catch(done);
+    return;
+  }
+  done();
+}
+
+/** الحذف القديم — يُبقي الواجهة متوافقة، ويستدعي التفريغ الشامل */
+function wipeAll() { clearAllLocal(); }
+
+/** يرسم جدول ما هو محفوظ في هذا المتصفح الآن */
+function renderStorageInfo() {
+  const box = $('#storageInfoBox');
+  if (!box) return;
+
+  const keys = appStorageKeys();
+  if (!keys.length) {
+    box.innerHTML = '<p class="empty">لا شيء محفوظ — التخزين المحلي فارغ.</p>';
+    return;
+  }
+
+  const rows = keys.map(k => {
+    let size = 0;
+    try { size = (localStorage.getItem(k) || '').length; } catch (e) { /* تجاهل */ }
+    const kb = size > 1024 ? (size / 1024).toFixed(1) + ' ك.ب' : size + ' بايت';
+    return `<tr>
+      <td data-label="البيان"><b>${esc(storageKeyLabel(k))}</b></td>
+      <td data-label="المفتاح"><code style="font-size:.8em;direction:ltr">${esc(k)}</code></td>
+      <td data-label="الحجم">${esc(kb)}</td>
+    </tr>`;
+  }).join('');
+
+  const total = keys.reduce((n, k) => {
+    try { return n + (localStorage.getItem(k) || '').length; } catch (e) { return n; }
+  }, 0);
+
+  box.innerHTML = `
+    <div class="tw" style="margin-top:10px"><table>
+      <thead><tr><th>البيان</th><th style="width:230px">المفتاح</th><th style="width:100px">الحجم</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <p class="hint">${keys.length} مفتاحاً · الإجمالي ${(total / 1024).toFixed(1)} ك.ب</p>`;
+}
+
+
 function loadLogoFile(e) {
   const f = e.target.files && e.target.files[0];
   e.target.value = '';
@@ -2835,62 +2971,21 @@ function initSync() {
   sync.readyPromise = S.ready;
   renderSyncUI(S.status());
 
-  /* استئناف الجلسة ثم مزامنة صامتة — دون تعطيل الواجهة */
-  return S.session().then(connected => {
+  /* =========================================================================
+     لا مزامنة تلقائية إطلاقاً
+     =========================================================================
+     قرار صريح بطلب المستخدم: فتح الصفحة **لا يُزامن شيئاً**. المزامنة تحدث
+     فقط عند ضغط زر: المزامنة الذكية، أو الرفع، أو التنزيل.
+
+     لماذا؟ لأن المزامنة التلقائية تجعل حالة البيانات غامضة: لا تعرف متى
+     رُفعت ولا من أي جهاز، وقد يُستبدل شيء وأنت لا تنتبه. والتحكم اليدوي
+     يجعل كل عملية مقصودة ومعلومة.
+
+     ما تبقّى هنا هو **استئناف الجلسة للعرض فقط**: نعرف الحساب المتصل لنُظهره
+     في الإعدادات. ولا دفع ولا سحب ولا دمج.
+     ========================================================================= */
+  return S.session().then(() => {
     renderSyncUI(S.status());
-    if (!connected) return;
-
-    /* =====================================================================
-       حماية البيانات المحلية عند تبديل الحساب
-       =====================================================================
-       المخاطرة: التخزين المحلي مشترك على الجهاز، وليس مقسَّماً بحسب الحساب.
-       فلو سجّل مستخدم آخر الدخول على الجهاز نفسه، لكانت مزامنته ترفع تقارير
-       المستخدم الأول إلى حسابه — وهذا تسريب بيانات بين حسابين.
-
-       الحل: نتذكّر آخر حساب زامنّاه. فإن اختلف الحساب، **لا نُزامن تلقائياً**
-       بل نسأل المستخدم صراحةً. وبلا موافقته تبقى البيانات المحلية كما هي.
-       ===================================================================== */
-    const curUid = (S.status() && S.status().uid) || currentSyncUid();
-    const owner = readLocalOwner();
-
-    if (owner && curUid && owner !== curUid) {
-      /* -----------------------------------------------------------------
-         حساب مختلف عن صاحب البيانات المحلية.
-         إن كان المستخدم قد رفض سابقاً فلا نُعيد السؤال في كل فتح للصفحة —
-         نحترم قراره ونكتفي بتذكيره.
-         ----------------------------------------------------------------- */
-      if (ownerRefused(curUid)) {
-        toast('البيانات المحلية تخصّ حساباً آخر ولم تُرفع إليه', 'warn', 6000);
-        renderSyncUI(S.status());
-        return;
-      }
-
-      const pushIt = confirm(
-        'البيانات المحلية على هذا الجهاز تعود إلى حساب آخر.\n\n' +
-        'سؤال مهم قبل المزامنة:\n' +
-        'هل تريد رفع التقارير المحلية إلى الحساب الجديد؟\n\n' +
-        '· «موافق» = تُرفع البيانات المحلية إلى الحساب الجديد.\n' +
-        '· «إلغاء» = تبقى محلية كما هي، ولن تُرفع (الأأمن).');
-      if (pushIt) {
-        markLocalOwner(curUid);
-        return S.syncNow().then(r => {
-          if (r && !r.skipped) toast(`تمت المزامنة (${r.total} تقرير)`, 'ok');
-          renderSyncUI(S.status());
-        }).catch(() => renderSyncUI(S.status()));
-      }
-      /* رفض الرفع: نُبقي البيانات محلية ولا نزامن، ونتذكّر القرار */
-      markLocalOwner(curUid, true);
-      toast('لم تُرفع البيانات المحلية إلى الحساب الجديد — بقيت محلية', 'warn', 8000);
-      renderSyncUI(S.status());
-      return;
-    }
-
-    /* الحساب نفسه (أو أول مرة): نزامن عادةً */
-    if (!owner) markLocalOwner(curUid);
-    return S.syncNow().then(r => {
-      if (r && !r.skipped) toast(`تمت المزامنة (${r.total} تقرير)`, 'ok');
-      renderSyncUI(S.status());
-    }).catch(() => renderSyncUI(S.status()));
   }).catch(() => { renderSyncUI(S.status()); });
 }
 
@@ -3033,6 +3128,59 @@ function renderSyncUI(st) {
 }
 function setText(sel, v) { const e = $(sel); if (e) e.textContent = v; }
 
+/* =============================================================================
+   حماية البيانات المحلية عند تبديل الحساب
+   =============================================================================
+   المخاطرة: التخزين المحلي مشترك على الجهاز وليس مقسَّماً بحسب الحساب. فلو
+   سجّل مستخدم آخر الدخول، لَرُفعت تقارير الأول إلى حسابه — تسريب بين حسابين.
+
+   الحل: نتذكّر آخر حساب زامنّاه. فإن اختلف الحساب **لا ننفّذ أي نقل**، بل
+   نسأل صراحةً — ولا نُزامن إلا بموافقة.
+
+   وموضع الفحص: **عند ضغط زر المزامنة** (لأن المزامنة صارت يدوية بالكامل).
+   =============================================================================
+   @param {'smart'|'upload'|'download'} kind نوع العملية المطلوبة
+   @returns {boolean} هل نُكمل؟
+   */
+function accountGuardOk(kind) {
+  const S = sync.available() ? sync.get() : null;
+  if (!S) return true;
+
+  const curUid = (S.status() && S.status().uid) || currentSyncUid();
+  const owner = readLocalOwner();
+
+  if (!curUid) return true;                    /* بلا حساب: لا خطر */
+  if (!owner) { markLocalOwner(curUid); return true; }   /* أول مرة */
+  if (owner === curUid) return true;           /* الحساب نفسه */
+
+  /* حساب مختلف: نُبلّغ ونطلب قراراً */
+  if (ownerRefused(curUid)) {
+    toast('البيانات المحلية تخصّ حساباً آخر ولم تُرفع إليه. ' +
+          'إن أردت رفعها فأوقف المزامنة ثم ادخل بالحساب الأصلي.', 'warn', 12000);
+    return false;
+  }
+
+  const isDownload = (kind === 'download');
+  const q = isDownload
+    ? 'البيانات المحلية على هذا الجهاز تعود إلى حساب آخر.\n\n' +
+      'أنت تطلب **التنزيل**: سيُستبدل ما على الجهاز ببيانات هذا الحساب.\n\n' +
+      '· «موافق» = يُستبدل المحلي ببيانات الحساب الجديد.\n' +
+      '· «إلغاء» = لا يحدث شيء (الأأمن).'
+    : 'البيانات المحلية على هذا الجهاز تعود إلى حساب آخر.\n\n' +
+      'أنت تطلب ' + (kind === 'smart' ? '**المزامنة**' : '**الرفع**') +
+      ': قد تُرفع بيانات المستخدم الأول إلى هذا الحساب.\n\n' +
+      '· «موافق» = تُرفع البيانات المحلية إلى الحساب الجديد.\n' +
+      '· «إلغاء» = لا يحدث شيء (الأأمن).';
+
+  if (!confirm(q)) {
+    if (!isDownload) markLocalOwner(curUid, true);   /* نتذكّر الرفض */
+    toast('لم يُنفَّذ شيء — البيانات المحلية كما هي', 'warn', 7000);
+    return false;
+  }
+  markLocalOwner(curUid);
+  return true;
+}
+
 function syncNow(userInitiated) {
   if (!sync.available()) { toast('وحدة المزامنة غير محمّلة', 'err'); return Promise.resolve(); }
   const S = sync.get();
@@ -3046,6 +3194,7 @@ function syncNow(userInitiated) {
       /* الدخول بحساب Google فقط — لا كلمات مرور في النظام */
       return S.connect().then(cred => {
         renderSyncUI(S.status());
+        if (!accountGuardOk('smart')) return;
         toast('تم الدخول: ' + (cred.email || cred.uid), 'ok');
         return S.syncNow();
       }).then(r => {
@@ -3053,6 +3202,7 @@ function syncNow(userInitiated) {
         renderSyncUI(S.status());
       });
     }
+    if (!accountGuardOk('smart')) { renderSyncUI(S.status()); return; }
     return S.syncNow().then(r => {
       renderSyncUI(S.status());
       /* تعارض مزامنة: نُظهره بوضوح بدل ضياع التعديلات بصمت */
@@ -4024,6 +4174,9 @@ function openTransfer(kind) {
     toast('ادخل بحساب Google أولاً', 'warn');
     return;
   }
+  /* حماية تبديل الحساب قبل فتح النافذة — فلا يكتب المستخدم كلمة التأكيد
+     ثم يُوقف عند التنفيذ */
+  if (!accountGuardOk(kind)) return;
 
   pendingTransfer = kind;
   const isUp = kind === 'upload';
@@ -4407,11 +4560,14 @@ const API = {
   applyDashPreset, syncDashPreset,
   /* سجل التعديلات */
   readHistory, writeHistory, recordHistory, restoreHistory, dropHistory,
-  renderHistoryView, previewHistory, scheduleDraftPush,
+  renderHistoryView, previewHistory, handleHistoryClick,
   handleHistoryClick,
   /* نقل قاعدة البيانات والمسودات والتوصيات */
   openTransfer, runTransfer, openDrafts, renderDrafts, describeReport,
   openCurrentDraft, exportCurrentDraft, exportRecsCsv,
+  /* التخزين المحلي */
+  clearAllLocal, appStorageKeys, storageKeyLabel, renderStorageInfo,
+  accountGuardOk,
 };
 if (typeof window !== 'undefined') window.ADMH = API;
 if (typeof module !== 'undefined' && module.exports) module.exports = API;
