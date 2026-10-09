@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '14.0.0';
+const APP_VERSION = '15.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1158,21 +1158,54 @@ function bindButtons() {
   bindOn('#btnWord', () => ADMHReport.run('تصدير Word', ADMHReport.exportWord));
   bindOn('#btnWord2', () => ADMHReport.run('تصدير Word', ADMHReport.exportWord));
   bindOn('#btnPreviewGo', () => showView('preview'));
-  /* قائمة خيارات نسخ التقرير */
+  /* ---------------------------------------------------------------------
+     قائمة خيارات نسخ التقرير.
+     ---------------------------------------------------------------------
+     عطلان حقيقيان كانا يمنعان ظهور الخيارات:
+
+     ١) مستمع document (الإغلاق عند النقر خارج القائمة) كان يعمل بعد هذا
+        المعالج في **نفس** حدث النقر — لأن الحدث يوصل إلى document بعد الزر.
+        فيُغلق القائمة فور فتحها. الحل: منع انتشار الحدث.
+
+     ٢) القائمة تقع داخل #view-preview، وهو **مخفي** حتى ننتقل إلى المعاينة.
+        فالخيارات لا تظهر أبداً من شاشة التحرير، ويبدو الزر كأنه ينسخ مباشرةً.
+        الحل: ننتقل إلى المعاينة أولاً، ثم نفتح القائمة في الإطار التالي.
+     --------------------------------------------------------------------- */
+  let copyMenuTimer = null;
+
   bindOn('#btnCopy', (event) => {
     event.preventDefault();
+    event.stopPropagation();          /* ← يمنع الإغلاق في نفس النقرة */
+
     const menu = $('#copyMenu');
     if (!menu) {
       showView('preview');
       setTimeout(() => ADMHReport.run('النسخ', () => ADMHReport.copyReport('all')), 60);
       return;
     }
+
+    /* ننتقل إلى المعاينة إن لم نكن فيها — فالقائمة داخلها ولا تظهر بدونها */
+    const inPreview = !$('#view-preview').classList.contains('hidden');
+    if (!inPreview) {
+      showView('preview');
+      ADMHReport.run('المعاينة', ADMHReport.renderPreview);
+      /* نفتح القائمة في الإطار التالي، بعد أن يصبح الحاوي ظاهراً */
+      clearTimeout(copyMenuTimer);
+      copyMenuTimer = setTimeout(() => {
+        menu.classList.add('open');
+        $('#btnCopy').setAttribute('aria-expanded', 'true');
+      }, 40);
+      return;
+    }
+
     const isOpen = menu.classList.toggle('open');
     $('#btnCopy').setAttribute('aria-expanded', String(isOpen));
   });
 
   document.querySelectorAll('#copyMenuList [data-copy-mode]').forEach(button => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();        /* لا نُغلق عبر مستمع document */
       const mode = button.getAttribute('data-copy-mode') || 'all';
       const menu = $('#copyMenu');
       if (menu) menu.classList.remove('open');
