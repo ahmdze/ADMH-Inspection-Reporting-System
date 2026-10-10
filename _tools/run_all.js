@@ -58,6 +58,7 @@ const GROUPS = [
   { file: 'assetsignore_test.js',  browser: false, what: 'أنماط .assetsignore تستثني الصحيح وتُبقي المهم' },
   { file: 'tooling_test.js',       browser: false, what: 'قارئ ZIP وخادم الاختبار وكنس Chrome' },
   { file: 'privacy_test.js',       browser: false, what: 'حارس الخصوصية: لا بيانات حقيقية ولا أسماء' },
+  { file: 'clear_storage_test.js', browser: false, what: 'التفريغ الشامل: localStorage و IndexedDB والجلسة' },
 
   /* --- متصفح حقيقي --- */
   { file: 'notables_test.js',      browser: true,  what: 'النطاق، العنوان التلقائي، خلوّ Word من الجداول' },

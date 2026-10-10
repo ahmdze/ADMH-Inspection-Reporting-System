@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '26.0.0';
+const APP_VERSION = '27.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -1837,7 +1837,24 @@ function bindButtons() {
     const S = sync.get();
     if (!S) return;
     if (!confirm('إيقاف المزامنة على هذا الجهاز؟\nستبقى التقارير محفوظة هنا، ولن تُحذف من السحابة.')) return;
-    S.signOut().then(() => { renderSyncUI(S.status()); toast('تم إيقاف المزامنة', 'ok'); });
+
+    /* ---------------------------------------------------------------------
+       الخروج يجب أن يمحو **آخر أثر** للحساب في هذا المتصفح.
+       ---------------------------------------------------------------------
+       `signOut()` تُنهي الحالة في الذاكرة، لكن قاعدة جلسة Firebase تبقى في
+       IndexedDB (`firebaseLocalStorageDb`). فمن يأتي بعدك قد يرى بياناتك على
+       جهاز مشترك. فنمحوها صراحةً — وهذا **جوهر الفائدة** من هذا الزر.
+       --------------------------------------------------------------------- */
+    S.signOut().then(() => {
+      renderSyncUI(S.status());
+      return clearFirebaseSession().catch(() => false);
+    }).then(() => {
+      toast('تم إيقاف المزامنة ومحو جلسة الحساب من هذا المتصفح', 'ok', 6000);
+      renderStorageInfo();
+    }).catch(() => {
+      renderSyncUI(S.status());
+      toast('تم إيقاف المزامنة', 'ok');
+    });
   });
   bindOn('#dot', () => showView('settings'));
 
@@ -2077,7 +2094,11 @@ function clearAllLocal() {
     'تفريغ التخزين المحلي بالكامل\n' +
     '────────────────────────────\n\n' +
     (hasData ? 'سيُحذف نهائياً:\n' + lines + '\n\n' : 'لا توجد بيانات محفوظة.\n\n') +
-    'وسيُمسح أيضاً مخزون التطبيق المؤقّت، ثم تُعاد الصفحة للتحميل من جديد.\n\n' +
+    'وسيُمسح أيضاً:\n' +
+    '• ذاكرة Firebase المؤقتة (نسخة البيانات للعمل بلا إنترنت)\n' +
+    '• مخزون التطبيق المؤقّت\n\n' +
+    '⚠️ لن تُمسّ جلسة الدخول — ستبقى مسجّلاً بحسابك الحالي.\n' +
+    'وإن أردت الخروج، استخدم زر «إيقاف المزامنة» في الإعدادات.\n\n' +
     '⚠️ لا يمكن التراجع. إن كان لديك عمل مهم، صدّر نسخة احتياطية أولاً.\n\n' +
     'هل تريد المتابعة؟';
 
@@ -2096,34 +2117,143 @@ function clearAllLocal() {
   toast('أُفرغ التخزين المحلي (' + removed.length + ' مفتاحاً) — تُعاد الصفحة الآن', 'ok', 3000);
 
   /* ---------------------------------------------------------------------
-     مسح مخزون عامل الخدمة ثم إعادة التحميل.
+     مسح كل مخازن البيانات ثم إعادة التحميل.
      ---------------------------------------------------------------------
-     بلا هذه الخطوة قد يخدم عامل الخدمة النسخة القديمة من الملفات، فلا تظهر
-     النسخة الجديدة. وننتظر المسح قبل التحديث ليكون التحميل نظيفاً.
+     ثلاثة مخازن مستقلة، ولا يكفي أحدها:
+       ١) localStorage  ← مفاتيح admh.*   (تم أعلاه)
+       ٢) IndexedDB     ← ذاكرة Firebase   (هنا)
+       ٣) Cache Storage ← ملفات عامل الخدمة (هنا)
+
+     و**لا نمسّ جلسة الحساب**: نبقي `firebaseLocalStorageDb` (طلب صريح من
+     المستخدم). ولكن إن أردت محو كل أثر على جهاز مشترك، أضف `firebase` إلى
+     المرشّح في `clearFirebaseCaches`.
+
+     ومسح Cache Storage ضروري: بدونه قد يخدمك عامل الخدمة النسخة القديمة من
+     الملفات، فلا ترى التحديث بعد إعادة التحميل.
      --------------------------------------------------------------------- */
   const done = () => { location.reload(); };
 
-  if (typeof caches !== 'undefined' && caches.keys) {
-    caches.keys()
-      .then(names => Promise.all(names.map(n => caches.delete(n))))
-      .catch(() => {})
-      .then(() => {
-        /* إلغاء تسجيل عامل الخدمة أيضاً، فيُعاد تسجيله نظيفاً بعد التحميل */
-        if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
-          return navigator.serviceWorker.getRegistrations()
-            .then(regs => Promise.all(regs.map(r => r.unregister())))
-            .catch(() => {});
-        }
-      })
-      .then(done)
-      .catch(done);
-    return;
-  }
-  done();
+  clearFirebaseCaches()
+    .catch(() => {})
+    .then(() => {
+      if (typeof caches !== 'undefined' && caches.keys) {
+        return caches.keys()
+          .then(names => Promise.all(names.map(n => caches.delete(n))))
+          .catch(() => {});
+      }
+    })
+    .then(() => {
+      /* إلغاء تسجيل عامل الخدمة، فيُعاد تسجيله نظيفاً بعد التحميل */
+      if (typeof navigator !== 'undefined' && navigator.serviceWorker &&
+          navigator.serviceWorker.getRegistrations) {
+        return navigator.serviceWorker.getRegistrations()
+          .then(regs => Promise.all(regs.map(r => r.unregister())))
+          .catch(() => {});
+      }
+    })
+    .then(done)
+    .catch(done);
 }
 
 /** الحذف القديم — يُبقي الواجهة متوافقة، ويستدعي التفريغ الشامل */
 function wipeAll() { clearAllLocal(); }
+
+/**
+ * يمسح **ذاكرة Firebase المؤقتة** (IndexedDB) **دون المساس بجلسة الحساب**.
+ * =============================================================================
+ * لماذا هذا منفصل عن `localStorage`؟
+ * -----------------------------------------------------------------------------
+ * Firestore يخزّن نسخة محليّة من البيانات في IndexedDB (للعمل بلا إنترنت)،
+ * وFirebase Auth يخزّن جلسة الدخول هناك أيضاً. وكلاهما **خارج** مفاتيح
+ * `localStorage` التي تبدأ بـ`admh.` — فحذفها لا يمسّهما.
+
+ * و`clearIndexedDbPersistence` **غير متاحة** في حزمة compat (تحقّقنا فعلياً
+ * في المتصفح: `db.clearIndexedDbPersistence === undefined`)، فنتعامل مع
+ * IndexedDB مباشرةً عبر `indexedDB.databases()`.
+ *
+ * -----------------------------------------------------------------------------
+ * ⚠️ ما يُحذف وما يبقى — بدقة
+ * -----------------------------------------------------------------------------
+ * يُحذف (بيانات، لا هوية):
+ *   `firestore/<projectId>`     نسخة البيانات للعمل بلا إنترنت
+ *   `firebase-heartbeat-database`  نبض الاتصال
+ *
+ * ويُحتفظ به (بدقّة أكبر: **لا يُلمس**):
+ *   `firebaseLocalStorageDb`    جلسة تسجيل الدخول
+ *
+ * والحذف يعتمد مطابقة **دقيقة** لا `startsWith('firebase')` — لأن ذاك يشمل
+ * قاعدة الجلسة أيضاً فيُسجّل الخروج بلا قصد. (كشف ذلك اختبارٌ فحص الأسماء.)
+ * -----------------------------------------------------------------------------
+ * @returns {Promise<{cleared:number, names:string[], kept:string[]}>}
+ */
+function clearFirebaseCaches() {
+  return new Promise(resolve => {
+    const done = r => resolve(r || { cleared: 0, names: [], kept: [] });
+
+    if (typeof indexedDB === 'undefined' || !indexedDB.databases) return done();
+
+    /* ---------------------------------------------------------------------
+       قواعد بيانات Firebase — **ليست** قاعدة الجلسة
+       --------------------------------------------------------------------- */
+    const isSessionDb = n => /^firebaseLocalStorage/i.test(n);
+    const isDataCache = n => !isSessionDb(n) && (/^firestore/i.test(n) || /^firebase[-_]/i.test(n));
+
+    return indexedDB.databases().then(list => {
+      const all = (list || []).map(d => (d && d.name) || '').filter(Boolean);
+      const names = all.filter(isDataCache);
+      const kept = all.filter(isSessionDb);
+      if (!names.length) return done({ cleared: 0, names: [], kept: kept });
+
+      /* حذف متوازٍ: كل قاعدة مستقلة عن الأخرى */
+      return Promise.all(names.map(n => new Promise(res => {
+        const req = indexedDB.deleteDatabase(n);
+        req.onsuccess = () => res(true);
+        req.onerror = () => res(false);
+        /* `blocked`: اتصال مفتوح يمنع الحذف — يُحذف عند إغلاق التبويب */
+        req.onblocked = () => res(false);
+      }))).then(results => done({
+        cleared: results.filter(Boolean).length,
+        names: names,
+        kept: kept,
+      }));
+    }).catch(() => done());
+  });
+}
+
+/**
+ * يُسجّل الخروج ويمحو جلسة الحساب من هذا المتصفح.
+ * -----------------------------------------------------------------------------
+ * هذا هو **الخيار الشامل** لمن يستخدم جهازاً مشتركاً: به لا يبقى لحسابك أثر
+ * على الجهاز. ولذلك نفصله عن `clearFirebaseCaches` (التي تُبقي الجلسة).
+ * -----------------------------------------------------------------------------
+ * @returns {Promise<boolean>}
+ */
+function clearFirebaseSession() {
+  return new Promise(resolve => {
+    if (typeof indexedDB === 'undefined' || !indexedDB.databases) return resolve(false);
+
+    /* ---------------------------------------------------------------------
+       مهم: نُحلّ الوعاء **صراحةً**.
+       ---------------------------------------------------------------------
+       كان `return indexedDB.databases().then(...)` داخل مُنفِّذ Promise —
+       وهذا **لا يُحلّ الوعاء أبداً**: `return` تُنهي المُنفِّذ فقط، لا تُمرّر
+       النتيجة إلى `resolve`. فيبقى الوعد معلّقاً للأبد، ومن ينتظره يتوقف
+       بلا أي رسالة. (كشفه اختبار توقّف عنده.)
+       --------------------------------------------------------------------- */
+    indexedDB.databases().then(list => {
+      const names = (list || [])
+        .map(d => (d && d.name) || '')
+        .filter(n => /^firebaseLocalStorage/i.test(n));
+      if (!names.length) return false;
+      return Promise.all(names.map(n => new Promise(res => {
+        const req = indexedDB.deleteDatabase(n);
+        req.onsuccess = () => res(true);
+        req.onerror = () => res(false);
+        req.onblocked = () => res(false);
+      }))).then(r => r.some(Boolean));
+    }).then(ok => resolve(!!ok)).catch(() => resolve(false));
+  });
+}
 
 /** يرسم جدول ما هو محفوظ في هذا المتصفح الآن */
 function renderStorageInfo() {
@@ -4707,6 +4837,7 @@ const API = {
   openCurrentDraft, exportCurrentDraft, exportRecsCsv,
   /* التخزين المحلي */
   clearAllLocal, appStorageKeys, storageKeyLabel, renderStorageInfo,
+  clearFirebaseCaches, clearFirebaseSession,
   accountGuardOk,
 };
 if (typeof window !== 'undefined') window.ADMH = API;
