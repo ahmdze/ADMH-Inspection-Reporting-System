@@ -205,7 +205,8 @@ function fullReport(id, name) {
     officials: [{ role: 'مدير المركز', job: 'طبيب', name: 'فلان الفلاني' }],
     staff: { 'الملاك': { total: '55', actual: '32' }, 'الأطباء': { total: '8', actual: '5' } },
     fp: {
-      managerJob: 'تقني', managerName: 'سارة محمد', deputyJob: 'طبيب', deputyName: 'آية فريد',
+      /* أسماء افتراضية واضحة — لا اسم شخص حقيقي في أي ملف بالمشروع */
+      managerJob: 'تقني', managerName: 'اسم تجريبي أول', deputyJob: 'طبيب', deputyName: 'اسم تجريبي ثاني',
       devices: '6', deviceState: 'تعمل', staff: '2', adminCount: '1', adminWhere: 'في الجهاز',
       reportFreq: 'يومياً', reportTo: 'القطاع', notes: 'ملاحظة بصمة',
     },

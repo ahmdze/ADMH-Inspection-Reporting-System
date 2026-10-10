@@ -7,7 +7,7 @@
 (function () {
 
 /* ---------------------------------------------------------------- ثوابت عامة */
-const APP_VERSION = '25.0.0';
+const APP_VERSION = '26.0.0';
 const LS_REPORTS = 'admh.reports.v2';
 const LS_DRAFT   = 'admh.draft.v2';
 const LS_SETTINGS= 'admh.settings.v2';
@@ -2878,9 +2878,23 @@ function initSync() {
       synced: Object.assign({}, syncMeta.synced || {}),
     }),
     save: payload => {
+      /* -----------------------------------------------------------------
+         replaceAll: التنزيل استبدال كامل، لا دمج
+         -----------------------------------------------------------------
+         عطل حقيقي: كان الحفظ يتخطّى أي مجموعة قيمتها `null` (أي غير موجودة
+         في السحابة) فيُبقي قيمتها القديمة على الجهاز. فلو نزّلت قاعدة حساب
+         آخر لا يحوي مكتبة عبارات، بقيت مكتبة الحساب السابق — فصار الجهاز
+         **خليطاً من حسابين**، والواجهة تقول إن القاعدة استُبدلت بالكامل.
+
+         الآن عند `replaceAll` نُطبّق ما في السحابة **بحضوره وغيابه**:
+         ما ليس في السحابة يُمسح محلياً.
+         ----------------------------------------------------------------- */
+      const replaceAll = !!payload.replaceAll;
+      let saveFailed = null;
+
       if (Array.isArray(payload.reports)) {
         state.reports = payload.reports.filter(r => r && r.id && !r._deleted);
-        jwrite(LS_REPORTS, state.reports);
+        if (!jwriteSilent(LS_REPORTS, state.reports)) saveFailed = 'الأرشيف';
         refreshArchiveMeta();
         renderArchive();
         fillDatalists();
@@ -2892,10 +2906,20 @@ function initSync() {
         state.logo = state.settings.logo || '';
         /* نكتب بصمت: فشل الكتابة هنا لا يجب أن يُشوّش، لكن **يكفي لنزيل
            الادّعاء بأن الإعدادات محفوظة محلياً**. */
+        if (!jwriteSilent(LS_SETTINGS, state.settings)) saveFailed = saveFailed || 'الإعدادات';
+      } else if (replaceAll) {
+        /* السحابة بلا إعدادات ← نُعيد الأصل ولا نُبقي إعدادات حساب آخر */
+        state.settings = blankSettings();
+        state.logo = state.settings.logo || '';
         jwriteSilent(LS_SETTINGS, state.settings);
+        fillSettingsForm();
       }
       if (payload.library && typeof payload.library === 'object') {
         ['records', 'reco', 'general'].forEach(k => { if (Array.isArray(payload.library[k])) state.library[k] = payload.library[k]; });
+        if (!jwriteSilent(LS_LIBRARY, state.library)) saveFailed = saveFailed || 'المكتبة';
+      } else if (replaceAll) {
+        /* السحابة بلا مكتبة ← نُعيد الأصل ولا نُبقي مكتبة حساب آخر */
+        state.library = defaultLibrary();
         jwriteSilent(LS_LIBRARY, state.library);
       }
       if (payload.lists && typeof payload.lists === 'object' && window.ADMHLists) {
@@ -2905,6 +2929,12 @@ function initSync() {
           renderListEditor();
           applyListChanges();
         }
+      } else if (replaceAll && window.ADMHLists) {
+        window.ADMHLists.resetAll();
+        saveListsCache();
+        renderListPicker();
+        renderListEditor();
+        applyListChanges();
       }
       /* سجل المؤسسات: نأخذه كما هو من الدمج ثم نُعيد بناء التوصيات من التقارير */
       if (payload.registry && typeof payload.registry === 'object') {
@@ -2913,9 +2943,12 @@ function initSync() {
           registryCache = R2.normalizeRegistry(payload.registry);
           jwriteSilent(LS_REGISTRY, registryCache);
           registryCache.recs = R2.buildRecs(state.reports, registryCache);
-          jwriteSilent(LS_REGISTRY, registryCache);
+          if (!jwriteSilent(LS_REGISTRY, registryCache)) saveFailed = saveFailed || 'سجل التوصيات';
           updateFollowCounts();
         }
+      } else if (replaceAll) {
+        /* السحابة بلا سجل ← نُعيد بناءه من التقارير المنزّلة وحدها */
+        rebuildRegistry();
       }
       /* -----------------------------------------------------------------
          المسودة الواردة من السحابة
@@ -2932,16 +2965,30 @@ function initSync() {
           (state.report.recGroups || []).some(g => (g.items || []).some(tidy)) ||
           (state.report.records || []).some(r => tidy(r.name))
         ));
-        if (!dirty || cloudAt > localDraftAt) {
+        /* في الاستبدال الكامل **لا نسأل**: التنزيل قرار صريح من المستخدم
+           أكّده بكتابة كلمة، فنُطبّق ما في السحابة كما هو. */
+        if (replaceAll || !dirty || cloudAt > localDraftAt) {
           state.report = migrate(payload.draft.report);
           state.editingId = payload.draft.editingId || state.report.id;
-          jwriteSilent(LS_DRAFT, payload.draft);
+          if (!jwriteSilent(LS_DRAFT, payload.draft)) saveFailed = saveFailed || 'المسودة';
           markSynced('draft', new Date(cloudAt || Date.now()).toISOString());
           renderAll();
-          toast('استُؤنفت المسودة من جهاز آخر', 'ok', 5000);
+          toast(replaceAll ? 'نُزّلت المسودة من السحابة' : 'استُؤنفت المسودة من جهاز آخر', 'ok', 5000);
         } else {
           toast('توجد مسودة أحدث على جهاز آخر — لم أستبدل ما تعمل عليه. راجعها هناك أو ابدأ تقريراً جديداً لسحبها.', 'warn', 12000);
         }
+      } else if (replaceAll) {
+        /* -----------------------------------------------------------------
+           الاستبدال الكامل: السحابة بلا مسودة ← تُمسح المسودة المحلية
+           -----------------------------------------------------------------
+           عطل حقيقي: لم يكن هناك مسار يمسح مسودة محلية قديمة. فتنزّل قاعدة
+           حساب بلا مسودة، وتبقى مسودة الحساب السابق في المحرر وفي التخزين.
+           ----------------------------------------------------------------- */
+        state.report = blankReport();
+        state.editingId = state.report.id;
+        state.dirtyFlag = false;
+        try { localStorage.removeItem(LS_DRAFT); } catch (e) { /* تجاهل */ }
+        renderAll();
       }
       /* لقطة في السجل عند وصول تقرير من السحابة */
       if (Array.isArray(payload.reports) && typeof recordHistory === 'function') {
@@ -2965,6 +3012,11 @@ function initSync() {
       }
       renderSyncUI(S.status());
       updateFollowCounts();
+      /* نُبلّغ عن أي فشل في الحفظ — فلا نُعلن نجاح استبدال لم يكتمل */
+      if (saveFailed) {
+        toast('⚠️ أخفق حفظ: ' + saveFailed + ' — قد يكون التخزين ممتلئاً', 'err', 12000);
+      }
+      return { ok: !saveFailed, failed: saveFailed || null };
     },
   });
   sync.ready = true;
@@ -3150,7 +3202,40 @@ function accountGuardOk(kind) {
   const owner = readLocalOwner();
 
   if (!curUid) return true;                    /* بلا حساب: لا خطر */
-  if (!owner) { markLocalOwner(curUid); return true; }   /* أول مرة */
+
+  /* ---------------------------------------------------------------------
+     لا سجل ملكية — لكن هل هناك بيانات محلية فعلية؟
+     ---------------------------------------------------------------------
+     كان النظام يسجّل الحساب الحالي مالكاً ويمضي. وهذا خطر في حالة واحدة:
+     **الترقية من نسخة أقدم** فيها تقارير محلية بلا مفتاح ملكية. فلا يستطيع
+     الكود أن يعرف أن هذه البيانات تخص هذا الحساب — وقد تخص غيره.
+
+     فإن وُجدت بيانات محلية فعلية، نسأل صراحةً بدل الافتراض.
+     --------------------------------------------------------------------- */
+  if (!owner) {
+    state.localReportsCount = state.localReportsCount || 0;
+    const reports = Array.isArray(state.reports) ? state.reports : [];
+    const hasRealData = reports.some(r => r && r.id && (
+      tidy(r.facilityName) || (r.records || []).some(x => tidy(x.name))
+    ));
+    if (hasRealData && !state.ownerAsked) {
+      state.ownerAsked = true;      /* لا نُعيد السؤال في الجلسة نفسها */
+      if (!confirm('يوجد على هذا الجهاز ' + reports.length + ' تقريراً محفوظاً، ' +
+          'ولا سجل يحدّد صاحبها (غالباً بعد تحديث النسخة).\n\n' +
+          'هل هذه البيانات تخص الحساب الحالي (' + (curUid || '').slice(0, 8) + '…)؟\n\n' +
+          '· «موافق» = تُنسب إليه ويمكن رفعها.\n' +
+          '· «إلغاء» = لا تُرفع إلى أي حساب (الأأمن).')) {
+        markLocalOwner(curUid, true);
+        toast('لم تُنسب البيانات المحلية إلى أي حساب — لن تُرفع', 'warn', 10000);
+        return false;
+      }
+    } else if (hasRealData) {
+      return true;                  /* سبق أن أكّد في هذه الجلسة */
+    }
+    markLocalOwner(curUid);
+    return true;
+  }
+
   if (owner === curUid) return true;           /* الحساب نفسه */
 
   /* حساب مختلف: نُبلّغ ونطلب قراراً */
@@ -4023,7 +4108,22 @@ function listBackups() {
 }
 
 /**
- * يستعيد نسخة كاملة — استبدال كامل أيضاً، فيأخذ نسخة قبلها.
+ * يستعيد نسخة كاملة — استبدال كامل حقيقي.
+ * =============================================================================
+ * ثلاثة أعطال حقيقية كانت هنا:
+ *
+ *  ١) **لا تتوقف إن أخفقت النسخة الاحتياطية.** كانت تستدعي `takeFullBackup`
+ *     وتُكمل بلا فحص نتيجتها. فإن امتلأ التخزين، ضاع العمل الحالي بلا شبكة أمان.
+ *
+ *  ٢) **لا تُحدّث الذاكرة.** كانت تكتب المسودة في التخزين ولا تُحدّث
+ *     `state.report` و`state.editingId`. فيبقى المحرر يعرض التقرير السابق،
+ *     وإن تابعت العمل يُعاد حفظه فيطغى على المسودة المستعادة.
+ *
+ *  ٣) **لا تمسح ما ليس في النسخة.** فلوقيمة مجموعة غائبة، تبقى قيمتها
+ *     الحالية — فتصير البيانات خليطاً من نسختين.
+ *
+ * والاستعادة الآن استبدال كامل: ما ليس في النسخة يُمسح أو يُعاد للأصل.
+ * =============================================================================
  * @param {number} index موضع النسخة في القائمة
  */
 function restoreFullBackup(index) {
@@ -4036,34 +4136,69 @@ function restoreFullBackup(index) {
       'ستُستبدل كل بيانات هذا الجهاز: ' + bk.counts.reports + ' تقريراً. ' +
       'وسنأخذ نسخة من وضعك الحالي أولاً.')) return false;
 
-  takeFullBackup('قبل استعادة نسخة');
+  /* ١) النسخة أولاً — و**لا نُكمل إن أخفقت** */
+  if (!takeFullBackup('قبل استعادة نسخة')) {
+    toast('⚠️ تعذّر أخذ نسخة احتياطية من وضعك الحالي — لم تُنفَّذ الاستعادة. ' +
+          'فرّغ مساحة تخزين ثم أعد المحاولة.', 'err', 14000);
+    return false;
+  }
 
   const p = bk.payload || {};
   let failed = null;
+  const note = (what, ok) => { if (!ok) failed = failed || what; };
+
   try {
+    /* ---------- الأرشيف ---------- */
     state.reports = Array.isArray(p.reports) ? p.reports : [];
-    if (!jwriteSilent(LS_REPORTS, state.reports)) failed = 'الأرشيف';
-    if (p.draft && !jwriteSilent(LS_DRAFT, p.draft)) failed = failed || 'المسودة';
-    if (p.settings) {
-      state.settings = Object.assign(blankSettings(), p.settings);
-      state.logo = state.settings.logo || '';
-      if (!jwriteSilent(LS_SETTINGS, state.settings)) failed = failed || 'الإعدادات';
+    note('الأرشيف', jwriteSilent(LS_REPORTS, state.reports));
+
+    /* ---------- المسودة ---------- */
+    if (p.draft && p.draft.report) {
+      /* ٢) نُحدّث **الذاكرة** أيضاً، لا التخزين وحده */
+      state.report = migrate(p.draft.report);
+      state.editingId = p.draft.editingId || state.report.id;
+      note('المسودة', jwriteSilent(LS_DRAFT, p.draft));
+    } else {
+      /* ٣) لا مسودة في النسخة ← تُمسح المحلية، ولا يبقى تقرير قديم في المحرر */
+      state.report = blankReport();
+      state.editingId = state.report.id;
+      try { localStorage.removeItem(LS_DRAFT); } catch (e) { /* تجاهل */ }
     }
-    if (p.library) {
-      state.library = p.library;
-      if (!jwriteSilent(LS_LIBRARY, state.library)) failed = failed || 'المكتبة';
-    }
-    if (p.lists && window.ADMHLists) {
-      window.ADMHLists.importAll(p.lists);
+
+    /* ---------- الإعدادات ---------- */
+    state.settings = p.settings
+      ? Object.assign(blankSettings(), p.settings)
+      : blankSettings();
+    state.logo = state.settings.logo || '';
+    note('الإعدادات', jwriteSilent(LS_SETTINGS, state.settings));
+
+    /* ---------- مكتبة العبارات ---------- */
+    state.library = (p.library && typeof p.library === 'object')
+      ? Object.assign(defaultLibrary(), p.library)
+      : defaultLibrary();
+    note('المكتبة', jwriteSilent(LS_LIBRARY, state.library));
+
+    /* ---------- القوائم ---------- */
+    if (window.ADMHLists) {
+      if (p.lists && typeof p.lists === 'object') window.ADMHLists.importAll(p.lists);
+      else window.ADMHLists.resetAll();     /* لا قوائم في النسخة ← الأصل */
       saveListsCache();
     }
-    if (p.registry && REG()) {
-      registryCache = REG().normalizeRegistry(p.registry);
-      jwriteSilent(LS_REGISTRY, registryCache);
+
+    /* ---------- سجل المؤسسات والتوصيات ---------- */
+    if (REG()) {
+      registryCache = (p.registry && typeof p.registry === 'object')
+        ? REG().normalizeRegistry(p.registry)
+        : REG().blankRegistry();
+      note('سجل التوصيات', jwriteSilent(LS_REGISTRY, registryCache));
     }
-    if (p.history && HIST()) {
-      historyCache = HIST().normalize(p.history);
-      jwriteSilent(LS_HISTORY, historyCache);
+
+    /* ---------- سجل التعديلات ---------- */
+    if (HIST()) {
+      historyCache = (p.history && typeof p.history === 'object')
+        ? HIST().normalize(p.history)
+        : HIST().blankHistory();
+      note('سجل التعديلات', jwriteSilent(LS_HISTORY, historyCache));
     }
   } catch (e) {
     failed = failed || (e && e.message);
@@ -4074,13 +4209,18 @@ function restoreFullBackup(index) {
     return false;
   }
 
+  /* ---------- إعادة رسم كاملة بعد نجاح كل الحفظ ---------- */
   rebuildRegistry();
   renderAll();
+  fillSettingsForm();
   refreshArchiveMeta();
   renderArchive();
   fillDatalists();
   renderHistoryView();
-  toast('استُعيدت النسخة الكاملة: ' + bk.counts.reports + ' تقريراً', 'ok', 7000);
+  if (typeof renderRecs === 'function') renderRecs();
+  if (typeof renderDash === 'function') renderDash();
+  if (typeof renderBackups === 'function') renderBackups();
+  toast('استُعيدت النسخة الكاملة: ' + (bk.counts.reports || 0) + ' تقريراً', 'ok', 7000);
   return true;
 }
 

@@ -63,8 +63,8 @@ check('fmtDate empty', APP.fmtDate('')==='');
 check('dayNameOf 2026-09-22 = الثلاثاء', APP.dayNameOf('2026-09-22')==='الثلاثاء', APP.dayNameOf('2026-09-22'));
 check('dayNameOf 2026-09-27 = الأحد', APP.dayNameOf('2026-09-27')==='الأحد', APP.dayNameOf('2026-09-27'));
 check('tidy collapses spaces', APP.tidy('  أ   ب  ') === 'أ ب', JSON.stringify(APP.tidy('  أ   ب  ')));
-check('titleName joins job + name', APP.titleName('م. طبي','علي حسن')==='م. طبي – علي حسن', APP.titleName('م. طبي','علي حسن'));
-check('titleName handles missing job', APP.titleName('','علي حسن')==='علي حسن');
+check('titleName joins job + name', APP.titleName('م. طبي','اسم تجريبي')==='م. طبي – اسم تجريبي', APP.titleName('م. طبي','اسم تجريبي'));
+check('titleName handles missing job', APP.titleName('','اسم تجريبي')==='اسم تجريبي');
 check('safeName strips illegal chars', !/[\\/:*?"<>|]/.test(APP.safeName('a/b:c*d?e"f<g>h|i')), APP.safeName('a/b:c*d?e"f<g>h|i'));
 
 console.log('\n=== library integrity ===');

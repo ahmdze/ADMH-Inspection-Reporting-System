@@ -934,6 +934,34 @@
     }, { merge: true });
   }
 
+  /* =========================================================================
+     قراءة الأوقات — بنوعيها
+     =========================================================================
+     عطل حقيقي كان منتشراً في مواضع كثيرة: كنّا نستخدم `Date.parse()` مباشرةً،
+     وهي **تتوقع نصاً**. فإذا كانت القيمة **رقماً** (كما يفعل `Date.now()`)
+     أرجعت `NaN`، و`NaN || 0` تعطي صفراً.
+
+     والنتيجة أن وقت المسودة المحلية (`at: Date.now()`) كان يُقرأ **صفراً
+     دائماً** — فتبدو مسودة السحابة أحدث منها أبداً:
+       · فلا تُرفع المسودة المحلية في المزامنة الذكية
+       · وتُطمس بمسودة أقدم من جهاز آخر
+
+     وهذا عطل خفيّ تماماً — لا رسالة خطأ ولا أثر. كشفه اختبارٌ صارم لرفع المسودة.
+     ========================================================================= */
+  function timeOf(v) {
+    if (v == null || v === '') return 0;
+    if (typeof v === 'number') return isFinite(v) ? v : 0;
+    if (v instanceof Date) return v.getTime();
+    const t = Date.parse(String(v));
+    return isFinite(t) ? t : 0;
+  }
+
+  /** يحوّل وقتاً (نصّياً أو رقمياً) إلى ISO — للتخزين */
+  function isoOf(v) {
+    const t = timeOf(v);
+    return new Date(t || Date.now()).toISOString();
+  }
+
   /* --------------------------------------------------------- السحب */
   function pullAll() {
     return reportsCol().get().then(snap => {
@@ -951,9 +979,7 @@
     });
   }
 
-  function pullSettings() {
-    return settingsDoc().get().then(d => (d.exists ? d.data() : null)).catch(() => null);
-  }
+  /* pullSettings مُعرَّفة لاحقاً مع دعم الوضع الصارم (strict) */
 
   /* =========================================================================
      نقل صريح لقاعدة البيانات — رفع أو تنزيل
@@ -993,8 +1019,19 @@
     return rec;
   }
 
-  /** يجمع كل ما في السحابة في كائن واحد */
-  function pullDatabase() {
+  /**
+   * يجمع كل ما في السحابة في كائن واحد.
+   * -----------------------------------------------------------------------------
+   * `strict` (افتراضي: **نعم** هنا): يرفض عند فشل أي قراءة.
+   *
+   * لأن هذه الدالة تُغذّي عمليات **استبدال كامل** (التنزيل). ولو ابتلعنا فشل
+   * القراءة وأعدنا `null`، لبدا الفشل «سحابة فارغة» — فيُمسح ما على الجهاز
+   * بلا سبب. فالأأمن أن يُرفض النقل ويُبلَّغ المستخدم.
+   * -----------------------------------------------------------------------------
+   * @param {boolean} [strict=true]
+   */
+  function pullDatabase(strict) {
+    const beStrict = (strict !== false);
     return reportsCol().get().then(snap => {
       const reports = [];
       if (snap && snap.forEach) {
@@ -1003,8 +1040,8 @@
           if (rec) reports.push(rec);           /* الشواهد تُستبعد */
         });
       }
-      return pullSettings().then(settingsDocData =>
-        pullDraft().then(draftDocData => {
+      return pullSettings(beStrict).then(settingsDocData =>
+        pullDraft(beStrict).then(draftDocData => {
           const payload = (settingsDocData && settingsDocData.payload) || {};
           return {
             reports: reports,
@@ -1017,6 +1054,9 @@
             device: (settingsDocData && settingsDocData.device) || '',
           };
         }));
+    }).catch(err => {
+      if (beStrict) throw taggedError(err, 'تعذّرت قراءة قاعدة السحابة — لم يُنفَّذ أي استبدال');
+      throw err;
     });
   }
 
@@ -1136,6 +1176,14 @@
 
   /**
    * ينزّل قاعدة السحابة إلى هذا الجهاز (استبدال كامل).
+   * =============================================================================
+   * قراءة **صارمة** (`strict`): إن فشلت قراءة التقارير أو الإعدادات أو المسودة،
+   * **يُرفض النقل ولا تُلمس بيانات الجهاز**. كان الفشل يُقرأ «سحابة فارغة»
+   * فيُمحى المحلي — وهذا أسوأ من الفشل نفسه.
+   *
+   * كما نُمرّر `replaceAll: true` إلى الحفظ، فيعرف أن غياب مجموعة يعني
+   * **حذفها محلياً** لا تجاهلها. وإلا بقي خليط من حسابين.
+   * =============================================================================
    * @returns {Promise<object>}
    */
   function downloadDatabase() {
@@ -1145,7 +1193,7 @@
     setState({ busy: true, error: '' });
     const stamp = new Date().toISOString();
 
-    return pullDatabase()
+    return pullDatabase(true)
       .then(data => {
         hooks.save({
           reports: data.reports,
@@ -1155,6 +1203,8 @@
           registry: data.registry,
           draft: data.draft,
           draftFromCloud: !!data.draft,
+          /* استبدال كامل: ما ليس في السحابة يُحذف محلياً */
+          replaceAll: true,
         });
         setState({ busy: false, lastSync: stamp, error: '' });
         stampLast(stamp);
@@ -1165,6 +1215,7 @@
           hasLibrary: !!data.library,
           hasLists: !!data.lists,
           hasRegistry: !!data.registry,
+          hasDraft: !!data.draft,
         };
       })
       .catch(err => {
@@ -1179,21 +1230,59 @@
      لها مستند خاص ودفع مؤجّل يمنع إغراق الشبكة. */
   function draftDoc() { return fb.db.collection('users').doc(state.user.uid).collection('meta').doc('draft'); }
 
-  function pullDraft() {
+  /**
+   * يقرأ المسودة السحابية.
+   * -----------------------------------------------------------------------------
+   * `strict` يفرّق بين «لا توجد مسودة» و«تعذّرت القراءة».
+   *
+   * وهذا فرق جوهري في عمليات **الاستبدال الكامل**: كان فشل الشبكة أو القراءة
+   * يُعيد `null`، فيبدو كأن السحابة فارغة — فيُمسح ما على الجهاز بلا سبب.
+   * ففي مسار الاستبدال نطلب `strict` فيُرفض النقل عند الفشل بدل أن يمحو بيانات.
+   * -----------------------------------------------------------------------------
+   * @param {boolean} [strict] ارفض عند فشل القراءة بدل إعادة null
+   */
+  function pullDraft(strict) {
     return draftDoc().get()
       .then(d => (d.exists ? d.data() : null))
-      .catch(() => null);
+      .catch(err => {
+        if (strict) throw taggedError(err, 'تعذّرت قراءة المسودة من السحابة');
+        return null;
+      });
   }
 
-  /** يدفع المسودة الحالية إلى السحابة */
-  function pushDraft() {
+  /**
+   * يقرأ مستند الإعدادات والمجموعات.
+   * @param {boolean} [strict] ارفض عند فشل القراءة بدل إعادة null
+   */
+  function pullSettings(strict) {
+    return settingsDoc().get()
+      .then(d => (d.exists ? d.data() : null))
+      .catch(err => {
+        if (strict) throw taggedError(err, 'تعذّرت قراءة بيانات السحابة');
+        return null;
+      });
+  }
+
+  /**
+   * يدفع المسودة إلى السحابة.
+   * @param {object} [override] مسودة صريحة تُدفع بدل قراءة الخطّافات.
+   * -----------------------------------------------------------------------------
+   * لماذا `override`؟ لأن `hooks.load()` يعيد **الحالة المحلية في هذه اللحظة**،
+   * وقد تكون تغيّرت منذ بدء المزامنة. وفي مسار الدمج نعرف بالضبط أي مسودة
+   * فازت، فلا يجوز أن نعتمد على قراءة قد تكون انقلبت.
+   *
+   * وقد كشف اختبار ذلك فعلاً: قراءة المسودة السحابية كانت تُحدّث الحالة أولاً،
+   * فيدفع الخطّاف المسودة السحابية القديمة بدل المحلية الفائزة.
+   * -----------------------------------------------------------------------------
+   */
+  function pushDraft(override) {
     ensureInit();
     if (!state.connected || !state.user) return Promise.resolve({ skipped: true });
-    const loaded = (hooks.load && hooks.load()) || {};
-    if (!loaded.draft) return Promise.resolve({ skipped: true });
+    const draft = override || ((hooks.load && hooks.load()) || {}).draft;
+    if (!draft) return Promise.resolve({ skipped: true });
     const stamp = new Date().toISOString();
     return draftDoc().set({
-      draft: loaded.draft,
+      draft: draft,
       updatedAt: stamp,
       device: state.device,
     }, { merge: true }).then(() => {
@@ -1225,8 +1314,8 @@
           return;
         }
         if (!loc) { added++; byId.set(rem.id, rem); return; }
-        const lt = Date.parse(loc.updatedAt || 0) || 0;
-        const rt = Date.parse(rem.updatedAt || 0) || 0;
+        const lt = timeOf(loc.updatedAt);
+        const rt = timeOf(rem.updatedAt);
         if (rt > lt) { updated++; byId.set(rem.id, rem); }
       });
 
@@ -1236,8 +1325,7 @@
         const out = { reports: mergedReports };
         let settingsChanged = false;
         const remotePayload = (remoteSettings && remoteSettings.payload) ? remoteSettings.payload : null;
-        const localAt = Date.parse((local.settings && local.settings.updatedAt)
-          || local.settingsAt || 0) || 0;
+        const localAt = timeOf((local.settings && local.settings.updatedAt) || local.settingsAt);
 
         /* =================================================================
            أوقات تعديل **المحتوى** لكل مجموعة — لا وقت كتابة المستند
@@ -1250,11 +1338,11 @@
            لا يمسّه الدفع. ومع مستند قديم لا يحمل هذه الأوقات، نرجع إلى
            `updatedAt` للتوافق ثم يُصحَّح بعد أول دفع.
            ================================================================= */
-        const docAt = Date.parse((remoteSettings && remoteSettings.updatedAt) || 0) || 0;
+        const docAt = timeOf(remoteSettings && remoteSettings.updatedAt);
         const groupAt = (name, localFallback) => {
           if (!remotePayload) return docAt;
           const v = remotePayload[name + 'At'];
-          if (v) return Date.parse(v) || 0;
+          if (v) return timeOf(v);
           /* توافق مع مستند قديم: لا نعرف وقت المحتوى، فنستخدم وقت الكتابة */
           return docAt;
         };
@@ -1280,21 +1368,49 @@
 
         /**
          * يقارن مجموعة واحدة ويقرّر مصيرها.
-         * @returns {*} القيمة الفائزة
+         * ---------------------------------------------------------------------
+         * يُعيد **القيمة الفائزة ووقت تعديلها الحقيقي** — لا وقتاً جديداً.
+         *
+         * وهذا عطل كان قائماً: كانت الدالة تُعيد القيمة وحدها، فكان `pushSettings`
+         * يولّد وقتاً جديداً للمجموعة عند كل دفع — حتى إن لم يتغيّر محتواها.
+         * فيصير وقت المحتوى السحابي أحدث من `lastSynced`، فيرى الجهاز في
+         * المزامنة التالية «الطرف الآخر تغيّر أيضاً» ويُعلن **تعارضاً كاذباً**.
+         * (وكان يظهر أحياناً فقط: إن أخذت العمليات أقل من ملّي ثانية تساوى
+         * الوقتان فلم يظهر. وهذا سبب عدم اكتشافه في الاختبارات السريعة.)
+         *
+         * القاعدة الآن: وقت الفائز يُحفظ كما هو، ولا يُولَّد وقت جديد إلا لِما
+         * تغيّر فعلاً ولم يكن له وقت.
+         * ---------------------------------------------------------------------
+         * @returns {{value:*, at:string}} القيمة الفائزة ووقتها
          */
         function mergeGroup(name, localValue, remoteValue, localAt2, remoteAt2) {
           const both = !!(localValue && remoteValue);
-          if (!both) return localValue || remoteValue || localValue;
+          const nowStr = () => new Date().toISOString();
 
-          const lastAt = Date.parse(synced[name] || 0) || 0;
+          if (!both) {
+            /* قيمة من طرف واحد: وقتها هو وقتها */
+            const value = localValue || remoteValue || localValue;
+            if (localValue) return { value: value, at: new Date(localAt2 || Date.now()).toISOString() };
+            if (remoteValue) return { value: value, at: new Date(remoteAt2 || Date.now()).toISOString() };
+            return { value: value, at: nowStr() };
+          }
+
+          const lastAt = timeOf(synced[name]);
           const lChanged = localAt2 > lastAt;
           const rChanged = remoteAt2 > lastAt;
 
-          if (!rChanged) return localValue;                 /* ٢ و٣ */
-          if (!lChanged) { settingsChanged2.value = true; return remoteValue; }  /* ١ */
+          /* ٢ و٣ — نُبقي المحلي بوقته الحقيقي */
+          if (!rChanged) {
+            return { value: localValue, at: new Date(localAt2 || Date.now()).toISOString() };
+          }
+          /* ١ — نأخذ السحابي بوقته الحقيقي */
+          if (!lChanged) {
+            settingsChanged2.value = true;
+            return { value: remoteValue, at: new Date(remoteAt2 || Date.now()).toISOString() };
+          }
           /* ٤ — تغيّر الطرفان: نحفظ المحلي ونُسجّل تعارضاً */
           conflicts.push(name);
-          return localValue;
+          return { value: localValue, at: new Date(localAt2 || Date.now()).toISOString() };
         }
 
         const mergedSettings = mergeGroup(
@@ -1302,13 +1418,13 @@
           localAt, groupAt('settings'));
         const mergedLibrary = mergeGroup(
           'library', local.library, (remotePayload && remotePayload.library) || null,
-          Date.parse(local.libraryAt || 0) || 0, groupAt('library'));
+          timeOf(local.libraryAt), groupAt('library'));
         const mergedLists = mergeGroup(
           'lists', local.lists, (remotePayload && remotePayload.lists) || null,
-          Date.parse(local.listsAt || 0) || 0, groupAt('lists'));
+          timeOf(local.listsAt), groupAt('lists'));
         const mergedRegistry = mergeGroup(
           'registry', local.registry, (remotePayload && remotePayload.registry) || null,
-          Date.parse(local.registryAt || 0) || 0, groupAt('registry'));
+          timeOf(local.registryAt), groupAt('registry'));
 
         /* -----------------------------------------------------------------
            المسودة: لها مستند خاص، وتُدمج بمنطق «الأحدث يفوز» مع تحفّظ.
@@ -1318,19 +1434,39 @@
            ولا نطمس ما بين يديك بلا علمك.
            ----------------------------------------------------------------- */
         return pullDraft().then(remoteDraft => {
-          const localDraftAt = Date.parse((local.draft && local.draft.at) || 0) || 0;
-          const remoteDraftAt = Date.parse((remoteDraft && remoteDraft.updatedAt) || 0) || 0;
-          if (remoteDraft && remoteDraft.draft && remoteDraftAt > localDraftAt) {
+          const localDraftAt = timeOf(local.draft && local.draft.at);
+          const remoteDraftAt = timeOf(remoteDraft && remoteDraft.updatedAt);
+
+          const remoteDraftIsNewer = !!(remoteDraft && remoteDraft.draft && remoteDraftAt > localDraftAt);
+
+          /* -----------------------------------------------------------------
+             المسودة: نأخذ الأحدث، ثم **نرفع المحلية إن كانت هي الأحدث**
+             -----------------------------------------------------------------
+             عطل حقيقي: هذه الدالة كانت **تسحب** المسودة ولا تدفعها أبداً. فتعدّل
+             مسودة على الحاسوب، وتضغط المزامنة الذكية، وتظهر «تمت المزامنة»
+             بينما المسودة لم تُرفع — خلافاً لما يذكره الدليل.
+
+             والشرط مهم: لا ندفع إن كانت مسودة الطرف الآخر أحدث، وإلا طمسنا
+             عملاً على جهاز آخر. ولا ندفع إن لم توجد مسودة محلية أصلاً.
+             ----------------------------------------------------------------- */
+          let draftPushed = false;
+          /* المسودة الفائزة تُحفظ **بعينها** لتُرفع، لا بقراءة لاحقة قد تتغيّر */
+          let draftToPush = null;
+          if (remoteDraftIsNewer) {
+            /* السحابية أحدث: نأخذها ولا نطمسها */
             out.draft = remoteDraft.draft;
             out.draftFromCloud = true;
             out.draftAt = remoteDraft.updatedAt;
+          } else if (local.draft && localDraftAt > 0) {
+            /* المحلية أحدث (أو لا مسودة سحابية): تُرفع **هي بعينها** */
+            draftToPush = local.draft;
           }
 
           if (settingsChanged2.value) {
-            out.settings = mergedSettings;
-            out.library = mergedLibrary;
-            out.lists = mergedLists;
-            out.registry = mergedRegistry;
+            out.settings = mergedSettings.value;
+            out.library = mergedLibrary.value;
+            out.lists = mergedLists.value;
+            out.registry = mergedRegistry.value;
             settingsChanged = true;
           }
           /* نُبلّغ عن التعارض ليُعرض للمستخدم بدل أن يضيع بصمت */
@@ -1345,32 +1481,47 @@
               ).join(' · ') + ' — أُبقيت نسختك المحلية وستُرفع. راجعها على الجهاز الآخر.';
           }
 
-          /* أوقات المزامنة الجديدة لهذه الجولة */
-          out.synced = {
-            settings: nowIso,
-            library: nowIso,
-            lists: nowIso,
-            registry: nowIso,
+          /* -----------------------------------------------------------------
+             أوقات آخر مزامنة لكل مجموعة — **وقت المحتوى الفائز**
+             -----------------------------------------------------------------
+             لا `nowIso`! فلو سجّلنا وقت المزامنة نفسه، ثم دفعنا المحتوى
+             بوقته الحقيقي الأقدم، لبدا في المزامنة التالية أن السحابي تغيّر
+             (لأن وقته أحدث من lastSynced) — تعارض كاذب مرة أخرى.
+             ----------------------------------------------------------------- */
+          out.contentAt = {
+            settings: mergedSettings.at,
+            library: mergedLibrary.at,
+            lists: mergedLists.at,
+            registry: mergedRegistry.at,
           };
+          out.synced = Object.assign({}, out.contentAt);
 
           const toPush = mergedReports.filter(r => {
             const rem = remote.find(x => x.id === r.id);
             if (!rem) return true;
-            const lt = Date.parse(r.updatedAt || 0) || 0;
-            const rt = Date.parse(rem.updatedAt || 0) || 0;
+            const lt = timeOf(r.updatedAt);
+            const rt = timeOf(rem.updatedAt);
             return lt > rt;
           });
 
           return pushReports(toPush)
             .then(() => pushSettings({
               payload: {
-                settings: mergedSettings,
-                library: mergedLibrary,
-                lists: mergedLists,
-                registry: mergedRegistry,
+                settings: mergedSettings.value,
+                library: mergedLibrary.value,
+                lists: mergedLists.value,
+                registry: mergedRegistry.value,
+                /* أوقات المحتوى الفائزة — فلا يُولَّد وقت جديد بلا تغيير */
+                settingsAt: mergedSettings.at,
+                libraryAt: mergedLibrary.at,
+                listsAt: mergedLists.at,
+                registryAt: mergedRegistry.at,
               },
             }))
+            /* المسودة المحلية تُرفع — **القيمة الفائزة بعينها** لا قراءة جديدة */
+            .then(() => (draftToPush ? pushDraft(draftToPush) : null))
             .then(() => {
+              if (draftToPush) draftPushed = true;
               hooks.save(out);
               const stamp = new Date().toISOString();
               jwrite(LS_LAST, stamp);
@@ -1380,6 +1531,7 @@
                 total: mergedReports.length, settingsChanged,
                 conflicts: conflicts, conflictNotice: out.conflictNotice || '',
                 draftFromCloud: !!out.draftFromCloud,
+                draftPushed: draftPushed,
               };
             });
         });

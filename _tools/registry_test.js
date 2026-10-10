@@ -238,18 +238,33 @@ section('=== ٥) دمج التوصيات: حالة المستخدم لا تُم�
   check('evidence SURVIVES a rebuild', reg.recs[ids[0]].evidence === 'كتاب ١٢٣');
   check('updatedAt SURVIVES a rebuild', !!reg.recs[ids[0]].updatedAt);
 
-  /* تعديل نص التوصية في التقرير يولّد معرّفاً جديداً (سلوك مقصود) */
+  /* -------------------------------------------------------------------------
+     تعديل صياغة توصية قائمة — الحالة يجب أن تبقى
+     -------------------------------------------------------------------------
+     كان هذا السلوك السابق: «تعديل النص يولّد معرّفاً جديداً» فتُفقد الحالة.
+     وقد رصده المراجع: «إذا تغيّرت صياغة توصية قائمة، قد يفقد النظام ارتباطها
+     بحالتها وموعدها ودليلها».
+
+     والآن نُطابق بالموضع داخل المجموعة عند فشل مطابقة النص، فتبقى الحالة.
+     ------------------------------------------------------------------------- */
   const reports2 = [mkReport('r1', 'مركز صحي أ', 'قطاع', '2026-01-10', 'زيارة تفتيشية',
     [['توصية أولى المُعدَّلة', 'توصية ثانية']])];
   const reg2 = R.buildRecs(reports2, reg);
-  check('changed text produces a new rec id',
-    Object.keys(reg2).length === 2 && !reg2[ids[0]],
-    { count: Object.keys(reg2).length, oldStillThere: !!reg2[ids[0]] });
-  check('the new rec starts fresh as pending',
-    reg2[Object.keys(reg2).find(k => k !== ids[1])].status === 'pending',
-    reg2[Object.keys(reg2).find(k => k !== ids[1])]);
+  const editedId = Object.keys(reg2).find(k => /المُعدَّلة/.test(reg2[k].text));
+  check('a reworded rec is matched, not duplicated',
+    Object.keys(reg2).length === 2, { count: Object.keys(reg2).length, ids: Object.keys(reg2) });
+  check('its status SURVIVES the reword', reg2[editedId] && reg2[editedId].status === 'done',
+    reg2[editedId] && reg2[editedId].status);
+  check('its note SURVIVES the reword',
+    reg2[editedId] && reg2[editedId].note === 'نُفّذت في آذار',
+    reg2[editedId] && reg2[editedId].note);
+  check('its evidence SURVIVES the reword',
+    reg2[editedId] && reg2[editedId].evidence === 'كتاب ١٢٣',
+    reg2[editedId] && reg2[editedId].evidence);
   check('the unchanged rec is untouched',
     !!reg2[ids[1]], Object.keys(reg2));
+  check('the rewording updated its text',
+    reg2[editedId] && /المُعدَّلة/.test(reg2[editedId].text), reg2[editedId] && reg2[editedId].text);
 
   /* التوصيات اليدوية تبقى */
   const reg3 = R.blankRegistry();

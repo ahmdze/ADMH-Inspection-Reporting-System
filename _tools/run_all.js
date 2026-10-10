@@ -50,12 +50,14 @@ const GROUPS = [
   { file: 'app_sync_test.js',      browser: false, what: 'ترابط الواجهة مع المزامنة' },
   { file: 'sync_conflict_test.js', browser: false, what: 'تعارض المزامنة ومنع فقدان التعديلات' },
   { file: 'firestore_shape_test.js', browser: false, what: 'بنية بيانات Firestore: الرفع والتنزيل حقلاً بحقل' },
+  { file: 'replace_all_test.js',   browser: false, what: 'الاستبدال الكامل: فشل القراءة ورفع المسودة والأوقات' },
   { file: 'account_guard_test.js', browser: false, what: 'حماية البيانات المحلية عند تبديل الحساب' },
   { file: 'sw_test.js',            browser: false, what: 'استراتيجية تخزين عامل الخدمة' },
   { file: 'init_once_test.js',     browser: false, what: 'تهيئة Firebase مرة واحدة (لا تحذيرات مكرّرة)' },
   { file: 'domain_test.js',        browser: false, what: 'ذكر النطاق الحقيقي في الرسائل' },
   { file: 'assetsignore_test.js',  browser: false, what: 'أنماط .assetsignore تستثني الصحيح وتُبقي المهم' },
   { file: 'tooling_test.js',       browser: false, what: 'قارئ ZIP وخادم الاختبار وكنس Chrome' },
+  { file: 'privacy_test.js',       browser: false, what: 'حارس الخصوصية: لا بيانات حقيقية ولا أسماء' },
 
   /* --- متصفح حقيقي --- */
   { file: 'notables_test.js',      browser: true,  what: 'النطاق، العنوان التلقائي، خلوّ Word من الجداول' },

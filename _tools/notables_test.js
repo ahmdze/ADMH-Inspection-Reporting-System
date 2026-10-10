@@ -95,16 +95,28 @@ const check=(n,c,d)=>{if(c){pass++;console.log('  ✓ '+n);}else{fail++;console.
   const line=(fpSec.rows||[]).find(x=>x[0]==='آلية رفع الموقف');
   check('frequency+target sentence built', !!(line && /يُرسل موقف الحضور والبصمة أسبوعياً إلى القطاع بانتظام/.test(line[1])), line && line[1]);
 
+  /* ---------------------------------------------------------------------------
+     بيانات تجريبية مُختلقة — لا أسماء حقيقية
+     ---------------------------------------------------------------------------
+     كان هذا الاختبار يستخدم **أسماء موظفين حقيقيين** منقولة من تقارير فعلية،
+     وقد ظهرت في مستودع عام. استُبدلت بأسماء افتراضية لا تخصّ أحداً.
+     القاعدة: لا يدخل اسم شخص حقيقي أي ملف في هذا المشروع.
+     --------------------------------------------------------------------------- */
+  const FIRST = 'محمد أحمد الجبوري';
+  const SECOND = 'علي حسين الموسوي';
+  const THIRD = 'زينب كريم العبيدي';
+  const FOURTH = 'فاطمة سعد الحسيني';
+
   console.log('\n=== build a full report and export ===');
-  r.facilityName='الخناسة'; r.sector='قطاع المدائن'; r.facilityKind='مركز صحي';
+  r.facilityName='مركز صحي تجريبي'; r.sector='قطاع تجريبي'; r.facilityKind='مركز صحي';
   r.visitDate='2026-09-22'; r.dayName='الثلاثاء'; r.population='20416'; r.title=''; r.titleEdited=false;
-  r.officials=[{role:'مسؤول الإدارة والخدمات',job:'ر. م. وقائي أقدم',name:'داود سلومي عبد'}];
+  r.officials=[{role:'مسؤول الإدارة والخدمات',job:'ر. م. وقائي أقدم',name:FIRST}];
   r.staff={'الملاك':{total:'55',actual:'32'},'الأطباء':{total:'3',actual:'2'},'أطباء الأسنان':{total:'7',actual:'5'},'الصيادلة':{total:'5',actual:'2'}};
-  r.fp.managerJob='م. فني'; r.fp.managerName='حسين تركي علي'; r.fp.devices='1'; r.fp.deviceState='عاطل'; r.fp.staff='شخصان فقط';
+  r.fp.managerJob='م. فني'; r.fp.managerName=SECOND; r.fp.devices='1'; r.fp.deviceState='عاطل'; r.fp.staff='شخصان فقط';
   r.procedures=[{date:'2026-09-22',kind:'توقيع مفاجئ',source:'موظفي المركز',note:''}];
   r.general=['تعطل جهاز البصمة الخاص بالمركز منذ 1/8/2026.'];
   r.positions=[{date:'2026-09-22',day:'الثلاثاء',verb:'بعد تدقيق',kind:'موقف الحضور المفاجئ (التدقيق المفاجئ)',intro:'',
-    items:{absent:[{job:'طبيب اسنان تدرج',name:'زينب مازن غازي',note:''}],noExit:[{job:'م. طبي',name:'علي حسن',note:'بدون بصمة'}],noEntry:[],noSurprise:[],noBoth:[]}}];
+    items:{absent:[{job:'طبيب اسنان تدرج',name:THIRD,note:''}],noExit:[{job:'م. طبي',name:FOURTH,note:'بدون بصمة'}],noEntry:[],noSurprise:[],noBoth:[]}}];
   r.records=[
     {name:'سجل الحركة',evalList:['مُدام وموثق ومحدّث.'],evalManual:'ولا يوجد حقل لتوقيع الموظفين.',eval:'مُدام وموثق ومحدّث. ولا يوجد حقل لتوقيع الموظفين.'},
     {name:'سجل الإجازات المرضية',evalList:['مُدام وموثق، وغير محدّث، ولا يتم ذكر التشخيص.'],evalManual:'',eval:'مُدام وموثق، وغير محدّث، ولا يتم ذكر التشخيص.'},

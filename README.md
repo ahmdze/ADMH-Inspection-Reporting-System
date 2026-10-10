@@ -207,7 +207,7 @@
 
 ```bash
 node _tools/syntax_check.js        # فحص صياغة كل الملفات (ثوانٍ)
-node _tools/run_all.js             # كل الاختبارات (٣٣ مجموعة)
+node _tools/run_all.js             # كل الاختبارات (٣٥ مجموعة)
 node _tools/run_all.js --fast      # بلا متصفح — أسرع بكثير
 node _tools/run_all.js --group unit      # الوحدات فقط
 node _tools/run_all.js --group browser   # المتصفح فقط
@@ -762,7 +762,7 @@ node _tools/lists_test.js           # 19 اختباراً للقوائم الق�
 node _tools/library_view_test.js    # 13 اختباراً لمكتبة العبارات
 node _tools/page_audit_test.js      # 13 اختباراً لسلامة المعرفات وسكربتات الصفحات
 node _tools/mobile_test.js          # 12 اختباراً لعرض الهاتف في متصفح حقيقي
-node _tools/registry_test.js        # 132 اختباراً لمنطق السجل والتوصيات والمؤشرات (بلا متصفح)
+node _tools/registry_test.js        # 135 اختباراً لمنطق السجل والتوصيات والمؤشرات (بلا متصفح)
 node _tools/history_test.js         #  59 اختباراً لمنطق سجل التعديلات (بلا متصفح)
 node _tools/followup_test.js        #  45 اختباراً للواجهات الثلاث في متصفح حقيقي
 node _tools/history_ui_test.js      #  33 اختباراً لسجل التعديلات في متصفح حقيقي
@@ -780,7 +780,7 @@ node _tools/visible_error_test.js   #  4 اختبارات لظهور أخطاء 
 node _tools/domain_test.js          #  1 اختبار لذكر النطاق الحقيقي في الرسائل
 ```
 
-**الإجمالي: ١٠٢٩ فحصاً** في ٣٣ مجموعة — شُغّلت جولتان متتاليتان بصفر فشل.
+**الإجمالي: ١٠٨٤ فحصاً** في ٣٥ مجموعة — شُغّلت جولتان متتاليتان بصفر فشل.
 
 > **الأسرع:** `npm test` أو `node _tools/run_all.js` — يشغّلها كلها ويُخرج
 > رمز خروج 1 عند أي فشل، فيصلح للـCI مباشرةً. وما دون ذلك تفصيل المجموعات.

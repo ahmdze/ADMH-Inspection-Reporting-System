@@ -225,9 +225,11 @@ window.ADMHReport = window.ADMHReport || {};
     const out = [];
     (r.recGroups || []).forEach(g => {
       const label = tidy(g.label);
+      let slot = 0;
       (g.items || []).forEach(it => {
         const text = tidy(it);
         if (!text) return;
+        slot += 1;
         out.push({
           /* لا رقم ترتيب في الاشتقاق — انظر recId */
           id: recId(facKey, text, visitDate),
@@ -235,6 +237,8 @@ window.ADMHReport = window.ADMHReport || {};
           text: text,
           label: label,
           groupLetter: tidy(g.letter),
+          /* موضع التوصية داخل مجموعتها — للمطابقة عند تحرير الصياغة */
+          slot: slot,
           sourceReportId: tidy(r.id),
           visitDate: visitDate,
           dueDate: null,
@@ -293,12 +297,40 @@ window.ADMHReport = window.ADMHReport || {};
       byLegacy[legacyKey(rec.facilityKey, rec.text, rec.visitDate)] = rec;
     });
 
+    /* ---------------------------------------------------------------------
+       طبقة ثالثة: المطابقة بالموضع داخل المجموعة
+       ---------------------------------------------------------------------
+       شكوى المراجع: «إذا تغيّرت صياغة توصية قائمة، يفقد النظام ارتباطها
+       بحالتها». وهذا صحيح: المعرّف مشتقّ من النص، فأي تحرير للصياغة يُنشئ
+       توصية جديدة ويتوه عملك السابق.
+
+       والحل هنا: إن لم نجد مطابقة بالمعرّف ولا بالنص، نطابق **بالموضع
+       داخل المجموعة نفسها وفي الزيارة نفسها**. فتعديل صياغة توصية يحفظ
+       حالتها وموعدها ودليلها.
+
+       وهذا ليس مثالياً — فإن كانت توصيتان متطابقتان في الموضع، فالترتيب هو
+       الفيصل. لكنه يُصلح الحالة الشائعة (تحرير صياغة) دون تغيير بنية التقرير.
+       --------------------------------------------------------------------- */
+    const bySlot = {};
+    Object.keys(prev).forEach(id => {
+      const rec = prev[id];
+      if (!rec) return;
+      const slot = tidy(rec.facilityKey) + '\u0000' +
+        (rec.visitDate ? String(rec.visitDate).slice(0, 10) : '') + '\u0000' +
+        tidy(rec.groupLetter) + '\u0000' + (rec.slot == null ? '' : rec.slot);
+      bySlot[slot] = rec;
+    });
+
     (Array.isArray(reports) ? reports : []).forEach(r => {
       recsFromReport(r).forEach(fresh => {
         seen[fresh.id] = true;
-        /* نبحث بالمعرّف الجديد، ثم بالمفتاح البديل (ترحيل) */
+        /* نبحث بالمعرّف، ثم بالنص، ثم بالموضع داخل المجموعة */
+        const slotKey = tidy(fresh.facilityKey) + '\u0000' +
+          (fresh.visitDate ? String(fresh.visitDate).slice(0, 10) : '') + '\u0000' +
+          tidy(fresh.groupLetter) + '\u0000' + (fresh.slot == null ? '' : fresh.slot);
         const old = prev[fresh.id] ||
-          byLegacy[legacyKey(fresh.facilityKey, fresh.text, fresh.visitDate)];
+          byLegacy[legacyKey(fresh.facilityKey, fresh.text, fresh.visitDate)] ||
+          bySlot[slotKey];
         if (old) {
           seen[old.id] = true;      /* لا يُعاد إدراجه كتوصية يتيمة */
           /* نحفظ ما عدّله المستخدم، ونُحدّث ما جاء من التقرير */
