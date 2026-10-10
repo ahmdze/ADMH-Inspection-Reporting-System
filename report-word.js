@@ -1,5 +1,5 @@
 /* =============================================================================
-   تصدير التقرير إلى Word — report-word.js
+   تصدير التقرير إلى Word — report-word-n.js
    =============================================================================
    يولّد ملف .docx حقيقياً (مقاس A4، اتجاه عربي RTL، بلا أي جدول) داخل المتصفح.
 
@@ -73,14 +73,26 @@ function exportWord() {
   const {
     Document, Packer, Paragraph, TextRun,
     AlignmentType, HeadingLevel, BorderStyle,
-    PageNumber, Footer,
+    PageNumber, Footer, LevelFormat,
   } = D;
 
   /* تباعد الأسطر — يتبع نمط التقارير الأصلية: w:line=276 w:lineRule=auto (~1.15)
      بدون w:lineRule صريح يفسّر بعض العارضين القيمة كـ«ضبط دقيق» فيتضاعف التباعد. */
   const LINE = 276;
-  /* مسافة بادئة معلّقة للبنود المرقّمة: يُسحب الرقم إلى داخل الهامش فيبقى ظاهراً */
-  const LIST_HANG = { start: 284, hanging: 284 };
+  /* -----------------------------------------------------------------
+     ترقيم Word الحقيقي (w:numPr) بدل كتابة «1- » نصاً داخل الفقرة.
+     ---------------------------------------------------------------------
+     · تعريف ترقيم واحد (NUM_REF) يُعاد استخدامه، ولكل قائمة «نسخة» (instance)
+       مستقلة فيبدأ العدّ من 1 في كل قسم وكل جهة توصيات.
+     · الرقم يُدار من Word: إدراج بند أو حذفه أو نقله يُعيد الترقيم تلقائياً،
+       والرقم لا يدخل في النص عند نسخ الفقرة أو البحث فيها.
+     · الإزاحة المعلّقة (الرقم عند الهامش والنص بعده) تُعرَّف في مستوى الترقيم
+       نفسه، فلا حاجة لتمريرها في كل فقرة.
+     ----------------------------------------------------------------- */
+  const NUM_REF = 'admh-decimal';
+  const NUM_INDENT = { start: 397, hanging: 397 };   /* 397 ≈ 0.7 سم: يكفي رقمين */
+  let numInstance = 0;
+  const newList = () => ++numInstance;               /* قائمة جديدة تبدأ من 1 */
 
   const para = (text, o) => {
     o = o || {};
@@ -88,10 +100,11 @@ function exportWord() {
     if (o.runs) runs.push(...o.runs);
     else runs.push(new TextRun({ text: String(text == null ? '' : text), rightToLeft: true, bold: !!o.bold, italics: !!o.italics, color: o.color, size: o.size || baseHalf, font: F }));
     return new Paragraph({
-      bidirectional: true,
+      bidi: true,
       alignment: o.align || AlignmentType.RIGHT,
       heading: o.heading,
       indent: o.indent,
+      numbering: o.numbering,
       spacing: {
         before: o.before == null ? 0 : o.before,
         after: o.after == null ? 60 : o.after,
@@ -102,6 +115,9 @@ function exportWord() {
       children: runs,
     });
   };
+  /* بند مرقَّم ترقيماً حقيقياً — inst هو رقم القائمة الذي أعاده newList() */
+  const numPara = (text, inst, o) =>
+    para(text, Object.assign({}, o, { numbering: { reference: NUM_REF, level: 0, instance: inst } }));
   /* لا جداول في ملف Word: كل البيانات تُصاغ فقرات. */
 
   const children = [];
@@ -113,7 +129,7 @@ function exportWord() {
       const lw = st.settings.logoW || 120, lh = st.settings.logoH || 90;
       const scale = Math.min(110 / lw, 78 / lh, 2.2);
       children.push(new Paragraph({
-        bidirectional: true,
+        bidi: true,
         alignment: AlignmentType.CENTER,
         spacing: { after: 40 },
         children: [new D.ImageRun({
@@ -129,7 +145,7 @@ function exportWord() {
   children.push(para(M.title, { align: AlignmentType.CENTER, size: baseHalf + 8, bold: true, color: '004D40', before: 80, after: 40 }));
   if (M.meta.length) children.push(para(M.meta.map(m => `${m[0]}: ${m[1]}`).join('   |   '), { align: AlignmentType.CENTER, size: baseHalf - 2, color: '444444', after: 60 }));
   children.push(new Paragraph({
-    bidirectional: true, spacing: { after: 100, line: LINE, lineRule: 'auto' },
+    bidi: true, spacing: { after: 100, line: LINE, lineRule: 'auto' },
     border: { bottom: { style: BorderStyle.DOUBLE, size: 6, color: '004D40', space: 4 } },
     children: [new TextRun({ text: '', size: 2, font: F })],
   }));
@@ -163,24 +179,29 @@ function exportWord() {
       (s.notes || []).forEach(n => children.push(para(n, { after: 20 })));
     } else if (s.type === 'list') {
       /* numbered === false يعني بنوداً غير مرقّمة (مثل سطور الملاك) */
-      s.items.forEach((it, i) => children.push(
-        s.numbered === false
-          ? para(it, { after: 30 })
-          : para(`${i + 1}- ${it}`, { after: 40, indent: LIST_HANG })
-      ));
+      if (s.numbered === false) {
+        s.items.forEach(it => children.push(para(it, { after: 30 })));
+      } else {
+        const inst = newList();
+        s.items.forEach(it => children.push(numPara(it, inst, { after: 40 })));
+      }
     } else if (s.type === 'positions') {
       s.blocks.forEach(b => {
         children.push(para(b.intro, { after: 40 }));
         b.cats.forEach(c => {
           children.push(para(c.title + ':', { bold: true, after: 20, before: 60 }));
-          c.items.forEach(it => children.push(para(it, { after: 10, indent: { start: 284 } })));
+          /* النموذج يكتب «1. الاسم» نصاً (تستهلكه المعاينة والنسخ) —
+             هنا ننزع هذه البادئة ونترك الترقيم لـWord */
+          const inst = newList();
+          c.items.forEach(it => children.push(numPara(String(it).replace(/^\s*\d+\s*[.\-)]\s*/, ''), inst, { after: 10 })));
         });
       });
     } else if (s.type === 'recs') {
       s.groups.forEach(g => {
         const lbl = [g.letter ? g.letter + '/' : '', g.intro || g.label].filter(Boolean).join(' ');
         if (lbl) children.push(para(lbl.replace(/\/\s*$/, '/'), { bold: true, before: 90, after: 30 }));
-        g.items.forEach((it, i) => children.push(para(`${i + 1}- ${it}`, { after: 40, indent: LIST_HANG })));
+        const inst = newList();
+        g.items.forEach(it => children.push(numPara(it, inst, { after: 40 })));
       });
     }
   });
@@ -198,6 +219,21 @@ function exportWord() {
   if (M.footerNote) children.push(para(M.footerNote, { align: AlignmentType.CENTER, before: 160, size: baseHalf - 2, color: '555555' }));
 
   const doc = new Document({
+    numbering: {
+      config: [{
+        reference: NUM_REF,
+        levels: [{
+          level: 0,
+          format: LevelFormat.DECIMAL,
+          text: '%1-',                                  /* الشكل نفسه السابق: 1- 2- 3- */
+          alignment: AlignmentType.LEFT,
+          style: {
+            paragraph: { indent: NUM_INDENT },
+            run: { font: F, size: baseHalf, rightToLeft: true },
+          },
+        }],
+      }],
+    },
     creator: 'نظام التقارير التفتيشية',
     title: M.title,
     description: 'تقرير زيارة تفتيشية',
@@ -216,7 +252,7 @@ function exportWord() {
       footers: {
         default: new Footer({
           children: [new Paragraph({
-            bidirectional: true, alignment: AlignmentType.CENTER,
+            bidi: true, alignment: AlignmentType.CENTER,
             children: [
               new TextRun({ text: 'صفحة ', rightToLeft: true, size: baseHalf - 4, font: F, color: '777777' }),
               new TextRun({ children: [PageNumber.CURRENT], size: baseHalf - 4, font: F, color: '777777' }),
@@ -239,7 +275,6 @@ function exportWord() {
     toast('فشل توليد الملف: ' + (err && err.message ? err.message : err), 'err', 5000);
   });
 }
-
 
   NS.exportWord = exportWord;
   NS.dataUrlToBytes = dataUrlToBytes;
